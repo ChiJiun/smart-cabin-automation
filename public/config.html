@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>區域與設備配置</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>區域與設備配置</h1>
+  <span class="spacer"></span>
+  <a href="/">← 回到中控儀表</a>
+</header>
+
+<div class="config-wrap">
+  <section class="panel">
+    <h2>車輛區域 <span class="sub">Zones</span></h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>ID</th><th>名稱</th><th>設備數</th><th></th></tr></thead>
+      <tbody id="zoneRows"></tbody>
+    </table></div>
+    <h3>新增區域</h3>
+    <form class="form-grid" id="zoneForm">
+      <label>ID（小寫英數）<input type="text" name="id" required pattern="[a-z0-9_\-]{1,32}" placeholder="trunk"></label>
+      <label>名稱<input type="text" name="name" required placeholder="後車廂"></label>
+      <div><button class="btn primary" type="submit">新增區域</button></div>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>設備 <span class="sub">Devices — 修改後按該列的「儲存」</span></h2>
+    <p class="hint">優先等級決定電力不足時的處置：P0 安全關鍵（固定、永不卸載）、P1 必要舒適（可降級不關閉）、P2 舒適（可降級至關閉）、P3 娛樂便利（最先關閉）。同等級內，卸載順序數字小者先卸載。額定功率：一般設備為開啟時耗電，可調檔設備為每檔耗電。</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>ID</th><th>類型</th><th>名稱</th><th>區域</th><th>等級</th><th>卸載順序</th><th>額定功率 (W)</th><th></th></tr></thead>
+      <tbody id="deviceRows"></tbody>
+    </table></div>
+    <h3>新增設備</h3>
+    <form class="form-grid" id="deviceForm">
+      <label>ID（小寫英數）<input type="text" name="id" required pattern="[a-z0-9_\-]{1,32}" placeholder="fridge-2"></label>
+      <label>類型<select name="type" id="newType"></select></label>
+      <label>名稱<input type="text" name="name" required placeholder="第二台冰箱"></label>
+      <label>區域<select name="zone" id="newZone"></select></label>
+      <label>優先等級<select name="priority" id="newPriority"></select></label>
+      <label>卸載順序<input type="number" name="shedOrder" value="10" min="0" max="999"></label>
+      <label>額定功率 (W)<input type="number" name="ratedW" min="0" max="2000" id="newRated"></label>
+      <label id="sideWrap" hidden>側邊<select name="side"><option value="left">左</option><option value="right">右</option></select></label>
+      <label id="posWrap" hidden>位置<select name="position"><option value="front">前</option><option value="rear">後</option></select></label>
+      <div><button class="btn primary" type="submit">新增設備</button></div>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>系統參數 <span class="sub">Settings</span></h2>
+    <form class="form-grid" id="settingsForm"></form>
+    <div class="ctl"><button class="btn primary" form="settingsForm" type="submit">儲存參數</button></div>
+  </section>
+</div>
+
+<script src="config.js"></script>
+</body>
+</html>
