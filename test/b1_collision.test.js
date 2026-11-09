@@ -153,17 +153,39 @@ test('B1: front dashcam fault -> rear dashcam uploads; eCall fault -> manual 119
   assert.equal(s().incident.ecallState, 'FAULT');
 });
 
-test('B1: an eCall fault during the countdown interrupts the call instead of connecting', () => {
+test('B1: an eCall fault during the countdown interrupts the call at once, even with the clock paused', () => {
   const { e, act, s, dev } = setup();
   act('impact', { g: 6 });
   e.tick(3);
   act('setFault', { id: 'ecall', fault: true });
-  assert.throws(() => act('selectEcall', { service: '110' }), /故障/);
+  // immediate: no tick needed, so the TA's 119/110/cancel buttons are disabled right away
+  assert.equal(s().incident.ecallState, 'FAULT');
+  assert.throws(() => act('selectEcall', { service: '110' }), /倒數期間/);
+  assert.throws(() => act('cancelEcall'), /倒數/);
   e.tick(8);
   assert.equal(s().incident.ecallState, 'FAULT');
   assert.equal(dev('ecall').mode, 'FAULT');
   assert.match(s().mainAlert.message, /請手動撥打/);
   assert.ok(s().log.some((l) => /自動通報中斷/.test(l.message)));
+  // repairing the module does not resurrect the interrupted call; the device shows a warning, not "normal"
+  act('setFault', { id: 'ecall', fault: false });
+  assert.equal(s().incident.ecallState, 'FAULT');
+  assert.equal(dev('ecall').status, 'WARNING');
+});
+
+test('B1: an upload without a source resumes when a dashcam becomes available again', () => {
+  const { e, act, s, dev } = setup();
+  act('setFault', { id: 'dashcam-front', fault: true });
+  act('setFault', { id: 'dashcam-rear', fault: true });
+  act('impact', { g: 6 });
+  assert.equal(s().incident.uploadSource, null);
+  e.tick(2);
+  act('setFault', { id: 'dashcam-rear', fault: false });
+  assert.equal(s().incident.uploadSource, 'dashcam-rear');
+  assert.equal(dev('dashcam-rear').mode, 'UPLOADING');
+  assert.ok(s().log.some((l) => /「後行車記錄器」恢復可用，開始上傳影像/.test(l.message)));
+  e.tick(10);
+  assert.equal(dev('dashcam-rear').mode, 'UPLOADED');
 });
 
 test('B1: the upload restarts on another dashcam when the source faults or is deleted', () => {
@@ -172,10 +194,12 @@ test('B1: the upload restarts on another dashcam when the source faults or is de
   e.tick(3);
   assert.equal(s().incident.uploadProgress, 30);
   act('setFault', { id: 'dashcam-rear', fault: true });
-  e.tick(1);
+  // reassigned at once (no tick needed) and the upload restarts from 0 %
   assert.equal(s().incident.uploadSource, 'dashcam-front');
   assert.equal(s().incident.uploadProgress, 0);
   assert.equal(dev('dashcam-front').mode, 'UPLOADING');
+  e.tick(1);
+  assert.equal(s().incident.uploadProgress, 10);
   assert.ok(s().log.some((l) => /「後行車記錄器」上傳中故障，改由「前行車記錄器」重新上傳影像/.test(l.message)));
   e.deleteDevice('dashcam-front');
   assert.equal(s().incident.uploadSource, null);

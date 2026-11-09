@@ -91,7 +91,8 @@ function muteReasons(state) {
 }
 
 const EMERGENCY_MODES = new Set(['EMERGENCY_LOCK', 'UPLOADING', 'UPLOADED', 'COUNTDOWN', 'CALLING', 'CONNECTED', 'FLASHING', 'IMPACT_DETECTED', 'EMERGENCY', 'CRITICAL_RANGE']);
-const WARNING_MODES = new Set(['STEADY', 'MUTED', 'LOW_RANGE_WARNING', 'WARNING', 'CANCELLED']);
+// 'FAULT' here is the eCall *call* state (the call was interrupted), which outlives a repaired module.
+const WARNING_MODES = new Set(['STEADY', 'MUTED', 'LOW_RANGE_WARNING', 'WARNING', 'CANCELLED', 'FAULT']);
 // A device the user has switched off is idle: it is in STANDBY (proposal status set:
 // Normal, Warning, Emergency, Standby, Shed, Deferred, Fault).
 const STANDBY_MODES = new Set(['STANDBY', 'IDLE', 'OFF']);

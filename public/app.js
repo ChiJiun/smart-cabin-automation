@@ -8,7 +8,7 @@ const STATUS_LABEL = {
   SHED: '已卸載', DEFERRED: '延後啟動', FAULT: '故障',
 };
 const DIRECTION_LABEL = { front: '前方', rear: '後方', left: '左側', right: '右側' };
-const ECALL_SERVICE_LABEL = { 119: '119（救護）', 110: '110（警政）', both: '119（救護）＋110（警政）' };
+const ECALL_SERVICE_LABEL = { 119: '119（救護）', 110: '110（警政）', both: '119（救護）並通報 110（警政）' };
 const POWER_LABEL = { NORMAL: '正常', HIGH_LOAD: '高負載', OVERLOAD: '超載・負載管理中', CRITICAL_POWER: '電力危急' };
 const POWER_STATE_LABEL = { REDUCED: '降載', SHED: '已卸載', DEFERRED: '延後啟動' };
 const REASON_LABEL = { OVERLOAD: '超載', EMERGENCY_RESERVE: '緊急電力保留' };

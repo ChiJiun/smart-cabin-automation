@@ -115,7 +115,7 @@ class Engine extends EventEmitter {
       shedOrder: c.shedOrder, ratedW: c.ratedW, props: { ...c.props },
       on: c.initial.on, level: c.initial.level, auto: c.initial.auto, load: c.initial.load,
       fault: false, poweredSinceOn: true,
-      mode: 'OFF', status: 'OFF', effectiveLevel: c.initial.level, drawW: 0, powerState: 'NORMAL', powerReason: null,
+      mode: 'OFF', status: 'STANDBY', effectiveLevel: c.initial.level, drawW: 0, powerState: 'NORMAL', powerReason: null,
     };
   }
 
@@ -133,6 +133,7 @@ class Engine extends EventEmitter {
   // ---------------------------------------------------------------- evaluate
   evaluate() {
     const s = this.state;
+    this._reconcileIncident();
     rules.applyClimate(s);
     for (const d of s.devices) d.mode = rules.deriveMode(d, s);
     const power = allocatePower(s.devices, {
@@ -207,12 +208,6 @@ class Engine extends EventEmitter {
     const inc = this.state.incident;
     const st = this.state.settings;
     if (!inc.active) return;
-    // The eCall module failing mid-way interrupts the call: the driver must dial manually.
-    if ((inc.ecallState === 'COUNTDOWN' || inc.ecallState === 'CALLING') && this._ecallFaulted()) {
-      inc.ecallState = 'FAULT';
-      inc.ecallRemainingS = 0;
-      this._log('rule', 'eCall 模組故障，自動通報中斷：請手動撥打 119（救護）或 110（警政）');
-    }
     if (inc.ecallState === 'COUNTDOWN') {
       inc.ecallRemainingS -= 1;
       if (inc.ecallRemainingS <= 0) {
@@ -228,8 +223,38 @@ class Engine extends EventEmitter {
     }
     if (inc.uploadSource && inc.uploadProgress < 100) {
       const src = this.state.devices.find((d) => d.id === inc.uploadSource);
+      if (src) inc.uploadProgress = Math.min(100, inc.uploadProgress + 100 / st.uploadDurationS);
+    }
+  }
+
+  /**
+   * Keep the incident consistent with the device topology on every evaluation (not only on a
+   * clock tick, so the TA sees the effect immediately while the clock is paused):
+   *  - the eCall module failing during COUNTDOWN / CALLING interrupts the call (FAULT);
+   *  - the upload source failing hands the upload to another dashcam;
+   *  - a dashcam becoming available again resumes an upload that had no source.
+   */
+  _reconcileIncident() {
+    const inc = this.state.incident;
+    if (!inc.active) return;
+    if ((inc.ecallState === 'COUNTDOWN' || inc.ecallState === 'CALLING') && this._ecallFaulted()) {
+      inc.ecallState = 'FAULT';
+      inc.ecallRemainingS = 0;
+      this._log('rule', 'eCall 模組故障，自動通報中斷：請手動撥打 119（救護）或 110（警政）');
+    }
+    if (inc.uploadProgress < 100) {
+      const src = inc.uploadSource ? this.state.devices.find((d) => d.id === inc.uploadSource) : null;
       if (src && src.fault) this._reassignUploadSource(`「${src.name}」上傳中故障`);
-      else if (src) inc.uploadProgress = Math.min(100, inc.uploadProgress + 100 / st.uploadDurationS);
+      else if (!src) {
+        const next = this._pickUploadSource(inc.direction);
+        if (next) {
+          inc.uploadSource = next.id;
+          inc.uploadProgress = 0;
+          this._log('rule', `「${next.name}」恢復可用，開始上傳影像`);
+        } else if (inc.uploadSource) {
+          inc.uploadSource = null;
+        }
+      }
     }
   }
 
