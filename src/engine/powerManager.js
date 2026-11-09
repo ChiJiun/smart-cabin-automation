@@ -10,7 +10,8 @@ const { getType, drawFor } = require('./deviceTypes');
  *         and a power summary.
  *
  * Rules
- *  1. During a collision incident every P2/P3 device is forced off (EMERGENCY_RESERVE).
+ *  1. During a collision incident every P2/P3 device and the entertainment audio are forced
+ *     off (EMERGENCY_RESERVE) to keep power for rescue communication.
  *  2. If demand > capacity, shed in a fixed order until demand <= capacity:
  *       devices sorted by priority (P3 first), then shedOrder (ascending), then config order.
  *       P3              -> switched off completely (SHED)
@@ -34,7 +35,7 @@ function allocatePower(devices, { capacityW, highLoadPct, emergency }) {
 
   if (emergency) {
     for (const d of devices) {
-      if (d.priority >= 2 && d.drawW > 0) {
+      if ((d.priority >= 2 || d.type === 'audio') && d.drawW > 0) {
         d.drawW = 0;
         d.powerState = 'SHED';
         d.powerReason = 'EMERGENCY_RESERVE';

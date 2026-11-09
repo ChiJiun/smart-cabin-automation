@@ -46,13 +46,17 @@
       <h3>預設情境（會先重置）</h3>
       <div class="ctl" id="scenarios"></div>
 
-      <h3>行為 1：前方撞擊</h3>
+      <h3>行為 1：前／後撞擊</h3>
       <div class="ctl">
         <label for="impactG">衝擊值</label>
         <input type="number" id="impactG" value="6" min="0" max="100" step="0.1"> g
-        <button class="btn danger" data-act="impact">觸發前撞</button>
+        <button class="btn danger" data-act="impact" data-dir="front">觸發前撞</button>
+        <button class="btn danger" data-act="impact" data-dir="rear">觸發後撞</button>
       </div>
       <div class="ctl">
+        <label>eCall</label>
+        <button class="btn" data-act="selectEcall" data-service="119" id="btnEcall119">撥打 119</button>
+        <button class="btn" data-act="selectEcall" data-service="110" id="btnEcall110">撥打 110</button>
         <button class="btn" data-act="cancelEcall" id="btnCancelEcall">取消 eCall</button>
         <button class="btn" data-act="clearIncident" id="btnClearIncident">解除事故</button>
       </div>

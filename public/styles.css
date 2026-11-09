@@ -150,7 +150,7 @@ input[type=range] { accent-color: var(--accent); }
 .badge.WARNING, .badge.HIGH_LOAD, .badge.REDUCED, .badge.OVERLOAD, .badge.warning { background: var(--warn-bg); color: var(--warn); }
 .badge.EMERGENCY, .badge.FAULT, .badge.CRITICAL_POWER, .badge.critical { background: var(--crit-bg); color: var(--crit); }
 .badge.SHED, .badge.DEFERRED { background: var(--warn-bg); color: var(--warn); border: 1px dashed currentColor; }
-.badge.OFF, .badge.STANDBY, .badge.info { background: var(--info-bg); color: var(--info); }
+.badge.STANDBY, .badge.info { background: var(--info-bg); color: var(--info); }
 .prio { font-size: 11px; font-weight: 700; padding: 0 5px; border-radius: 4px; color: #fff; }
 .prio.p0 { background: var(--p0); } .prio.p1 { background: var(--p1); } .prio.p2 { background: var(--p2); } .prio.p3 { background: var(--p3); }
 
@@ -178,6 +178,18 @@ input[type=range] { accent-color: var(--accent); }
 .mini .v { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .ecall { border: 1px solid var(--crit); border-radius: 9px; padding: 12px; margin-bottom: 10px; }
 .ecall .count { font-size: 40px; font-weight: 800; color: var(--crit); font-variant-numeric: tabular-nums; line-height: 1.1; }
+.ecall .dir-tag { display: inline-block; font-size: 12px; font-weight: 700; color: var(--crit); background: var(--crit-bg); border-radius: 6px; padding: 2px 8px; margin-bottom: 8px; }
+.ecall-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ---------- mirror blind-spot LEDs (Behavior 3) ---------- */
+.leds { display: flex; gap: 12px; align-items: center; }
+.led-wrap { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
+.led { width: 12px; height: 12px; border-radius: 50%; display: inline-block; background: var(--border); border: 1px solid var(--muted); }
+.led.STEADY { background: var(--warn); border-color: var(--warn); box-shadow: 0 0 6px var(--warn); }
+.led.FLASHING { background: var(--crit); border-color: var(--crit); box-shadow: 0 0 8px var(--crit); animation: led-blink .3s steps(2, start) infinite; }
+.led.FAULT { background: repeating-linear-gradient(45deg, var(--muted) 0 2px, transparent 2px 4px); }
+@keyframes led-blink { 50% { opacity: .15; box-shadow: none; } }
+@media (prefers-reduced-motion: reduce) { .led.FLASHING { animation: none; outline: 2px dashed var(--crit); } }
 .progress { height: 8px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
 .progress > div { height: 100%; background: var(--accent); transition: width .3s; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }

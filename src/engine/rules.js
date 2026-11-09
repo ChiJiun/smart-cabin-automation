@@ -8,6 +8,8 @@
 
 const DIRECTION_LABEL = { front: '前方', rear: '後方', left: '左側', right: '右側' };
 const SIDE_LABEL = { left: '左側', right: '右側' };
+// Behavior 1: which emergency service the eCall dials.
+const ECALL_SERVICE_LABEL = { 119: '119（救護）', 110: '110（警政）', both: '119（救護）並通報 110（警政）' };
 
 // ---------- Behavior 6: climate ----------
 function hvacAutoLevel(ambientC, targetC) {
@@ -35,7 +37,7 @@ function deriveMode(d, state) {
   const { sensors, incident, lowRange } = state;
   switch (d.type) {
     case 'g_sensor':
-      return incident.active ? 'IMPACT_DETECTED' : 'MONITORING';
+      return incident.active && (!d.props.position || d.props.position === incident.direction) ? 'IMPACT_DETECTED' : 'MONITORING';
     case 'dashcam':
       if (!incident.active) return 'RECORDING';
       if (incident.uploadSource === d.id) return incident.uploadProgress >= 100 ? 'UPLOADED' : 'UPLOADING';
@@ -89,8 +91,12 @@ function muteReasons(state) {
 }
 
 const EMERGENCY_MODES = new Set(['EMERGENCY_LOCK', 'UPLOADING', 'UPLOADED', 'COUNTDOWN', 'CALLING', 'CONNECTED', 'FLASHING', 'IMPACT_DETECTED', 'EMERGENCY', 'CRITICAL_RANGE']);
-const WARNING_MODES = new Set(['STEADY', 'MUTED', 'LOW_RANGE_WARNING', 'WARNING', 'CANCELLED']);
-const STANDBY_MODES = new Set(['STANDBY', 'IDLE']);
+// 'FAULT' here is the eCall *call* state (the call was interrupted), which outlives a repaired module.
+const WARNING_MODES = new Set(['STEADY', 'MUTED', 'LOW_RANGE_WARNING', 'WARNING', 'CANCELLED', 'FAULT']);
+// A device the user has switched off is idle: it is in STANDBY (proposal status set:
+// Normal, Warning, Emergency, Standby, Shed, Deferred, Fault).
+const STANDBY_MODES = new Set(['STANDBY', 'IDLE', 'OFF']);
+const STATUSES = ['NORMAL', 'WARNING', 'EMERGENCY', 'STANDBY', 'SHED', 'DEFERRED', 'FAULT'];
 
 function deriveStatus(d) {
   if (d.fault) return 'FAULT';
@@ -98,7 +104,6 @@ function deriveStatus(d) {
   if (d.powerState === 'SHED') return 'SHED';
   if (EMERGENCY_MODES.has(d.mode)) return 'EMERGENCY';
   if (d.powerState === 'REDUCED' || WARNING_MODES.has(d.mode)) return 'WARNING';
-  if (d.mode === 'OFF') return 'OFF';
   if (STANDBY_MODES.has(d.mode)) return 'STANDBY';
   return 'NORMAL';
 }
@@ -133,16 +138,18 @@ function computeAlerts(state, power) {
   const { incident, sensors } = state;
 
   if (incident.active) {
+    const dir = DIRECTION_LABEL[incident.direction] || '';
+    const service = ECALL_SERVICE_LABEL[incident.ecallService] || ECALL_SERVICE_LABEL.both;
     let message;
     switch (incident.ecallState) {
-      case 'COUNTDOWN': message = `${incident.ecallRemainingS} 秒後自動撥打 119 並通報 110，可按「我沒事，取消通報」取消`; break;
-      case 'CALLING': message = '正在撥打 119 並通報 110…'; break;
-      case 'CONNECTED': message = '已連線 119 / 110，已傳送車輛 GPS 座標與事故狀態'; break;
+      case 'COUNTDOWN': message = `${incident.ecallRemainingS} 秒後自動撥打 ${ECALL_SERVICE_LABEL.both}；可立即選擇撥打 119（救護）或 110（警政），或按「我沒事，取消通報」`; break;
+      case 'CALLING': message = `正在撥打 ${service}…`; break;
+      case 'CONNECTED': message = `已連線 ${service}，已傳送車輛 GPS 座標與撞擊方向（${dir}）`; break;
       case 'CANCELLED': message = '駕駛已取消緊急通報'; break;
-      case 'FAULT': message = 'eCall 故障，請手動撥打 119（救護）或 110（報案）'; break;
+      case 'FAULT': message = `eCall 故障，請手動撥打 ${ECALL_SERVICE_LABEL[119]} 或 ${ECALL_SERVICE_LABEL[110]}`; break;
       default: message = '';
     }
-    alerts.push({ id: 'collision', priority: 1, level: 'critical', title: `前方撞擊事故（${incident.impactG} g）`, message });
+    alerts.push({ id: 'collision', priority: 1, level: 'critical', title: `${dir}撞擊事故（${incident.impactG} g）`, message });
   }
 
   for (const m of byType('mirror')) {
@@ -204,5 +211,5 @@ function computeAlerts(state, power) {
 
 module.exports = {
   hvacAutoLevel, applyClimate, deriveMode, deriveStatus, muteReasons,
-  computeNavigation, computeAlerts, DIRECTION_LABEL,
+  computeNavigation, computeAlerts, DIRECTION_LABEL, ECALL_SERVICE_LABEL, STATUSES,
 };

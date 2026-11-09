@@ -3,9 +3,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { setup } = require('./helpers');
 
-test('B5: default state is NORMAL at 203 W / 1000 W', () => {
+test('B5: default state is NORMAL at 208 W / 1000 W', () => {
   const { s } = setup();
-  assert.equal(s().power.demandW, 203);
+  assert.equal(s().power.demandW, 208);
   assert.equal(s().power.status, 'NORMAL');
 });
 
@@ -15,9 +15,9 @@ test('B5: 80–100 % load -> HIGH_LOAD warning, nothing shed', () => {
   act('setDevice', { id: 'fridge', on: true });
   act('setDevice', { id: 'seat-driver', on: true, level: 3 });
   act('setDevice', { id: 'seat-passenger', on: true, level: 2 });
-  // 203 + 300 + 60 + 135 + 90 = 788 -> 78.8 %
+  // 208 + 300 + 60 + 135 + 90 = 793 -> 79.3 %
   assert.equal(s().power.status, 'NORMAL');
-  act('setDevice', { id: 'screen-rear-left', on: true }); // 818 -> 81.8 %
+  act('setDevice', { id: 'screen-rear-left', on: true }); // 823 -> 82.3 %
   assert.equal(s().power.status, 'HIGH_LOAD');
   assert.ok(s().alerts.some((a) => a.id === 'power' && /用電量偏高/.test(a.title)));
   assert.ok(s().devices.every((d) => d.powerState === 'NORMAL'));
@@ -26,8 +26,8 @@ test('B5: 80–100 % load -> HIGH_LOAD warning, nothing shed', () => {
 test('B5: winter overload scenario sheds P3 in order and keeps demand <= capacity', () => {
   const { e, s, dev } = setup();
   e.loadScenario('winter-overload');
-  assert.equal(s().power.requestedW, 1288);
-  assert.equal(s().power.demandW, 958);
+  assert.equal(s().power.requestedW, 1293);
+  assert.equal(s().power.demandW, 963);
   assert.equal(s().power.status, 'OVERLOAD');
   for (const id of ['inverter', 'screen-rear-left', 'screen-rear-right']) assert.equal(dev(id).powerState, 'DEFERRED');
   assert.equal(dev('audio').powerState, 'SHED'); // was running before -> shed, not deferred
@@ -53,10 +53,10 @@ test('B5: restoring capacity restores devices in reverse order', () => {
   act('setAlternatorFault', { fault: false });
   assert.equal(dev('hvac').effectiveLevel, 5);
   assert.equal(dev('seat-driver').powerState, 'NORMAL');
-  assert.equal(s().power.demandW, 958);
+  assert.equal(s().power.demandW, 963);
   act('setCapacity', { watts: 1300 });
   assert.ok(s().devices.every((d) => d.powerState === 'NORMAL'));
-  assert.equal(s().power.demandW, 1288);
+  assert.equal(s().power.demandW, 1293);
 });
 
 test('B5: P1/P2 seat heaters are reduced one level at a time (rear first)', () => {
@@ -64,9 +64,9 @@ test('B5: P1/P2 seat heaters are reduced one level at a time (rear first)', () =
   act('setDevice', { id: 'seat-rear', on: true, level: 3 });
   act('setDevice', { id: 'seat-driver', on: true, level: 3 });
   act('setDevice', { id: 'audio', on: false });
-  // 133 + 135 + 135 = 403
+  // 138 + 135 + 135 = 408
   act('setCapacity', { watts: 330 });
-  // need -73: rear 3->2 (-45) -> 358, rear 2->1 (-45) -> 313
+  // need -78: rear 3->2 (-45) -> 363, rear 2->1 (-45) -> 318
   assert.equal(dev('seat-rear').powerState, 'REDUCED');
   assert.equal(dev('seat-rear').effectiveLevel, 1);
   assert.equal(dev('seat-driver').effectiveLevel, 3);
@@ -76,7 +76,7 @@ test('B5: CRITICAL_POWER when P0 + P1 minimum exceeds capacity', () => {
   const { e, s } = setup();
   e.loadScenario('critical-power');
   assert.equal(s().power.status, 'CRITICAL_POWER');
-  assert.equal(s().power.demandW, 313);
+  assert.equal(s().power.demandW, 318);
   assert.ok(s().alerts.some((a) => a.title === '電力不足，僅維持安全設備'));
 });
 

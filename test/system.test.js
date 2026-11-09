@@ -18,8 +18,16 @@ test('reset restores the known initial state but keeps configuration', () => {
   assert.equal(s().settings.capacityW, 1000);
   assert.equal(s().environment.rangeKm, 120);
   assert.ok(s().devices.some((d) => d.id === 'fridge-2'));
+  e.updateSettings({ capacityW: 500, ecallConnectS: 7 });
+  e.updateDevice('audio', { priority: 1 });
   act('factoryReset');
   assert.ok(!s().devices.some((d) => d.id === 'fridge-2'));
+  // configuration is reloaded from the built-in JSON data file
+  const json = require('../src/config/defaultVehicle.json');
+  assert.deepEqual(s().settings, json.settings);
+  assert.equal(s().devices.find((d) => d.id === 'audio').priority, 3);
+  assert.equal(s().devices.length, json.devices.length);
+  assert.equal(s().power.demandW, 208);
 });
 
 test('config: device priority affects shedding; safety devices locked to P0', () => {
@@ -71,4 +79,18 @@ test('HTTP API: actions, validation errors and config endpoints', async () => {
   } finally {
     server.close();
   }
+});
+
+test('device status is always one of the seven proposal statuses', () => {
+  const { e, act, s } = setup();
+  const { STATUSES } = require('../src/engine/rules');
+  const check = () => { for (const d of s().devices) assert.ok(STATUSES.includes(d.status), `${d.id}: ${d.status}`); };
+  check();
+  assert.equal(s().devices.find((d) => d.id === 'seat-driver').status, 'STANDBY'); // switched off = standby
+  e.loadScenario('alternator-fault');
+  check();
+  act('impact', { g: 6, direction: 'rear' });
+  act('setFault', { id: 'ecu', fault: true });
+  check();
+  assert.ok(s().devices.every((d) => d.status !== 'OFF'));
 });
