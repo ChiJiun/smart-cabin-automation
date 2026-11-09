@@ -105,7 +105,7 @@ function renderCockpit(s) {
     <div class="mini"><div class="k">車外溫度</div><div class="v">${s.environment.ambientTempC} °C</div></div>
     <div class="mini"><div class="k">空調</div><div class="v">${hvac ? (hvac.powerState === 'NORMAL' || hvac.powerState === 'REDUCED' ? `${hvac.mode === 'HEATING' ? '暖氣' : hvac.mode === 'COOLING' ? '冷氣' : hvac.mode === 'OFF' ? '關閉' : '送風'} ${hvac.on ? hvac.effectiveLevel + ' 檔' : ''}` : STATUS_LABEL[hvac.status]) : '—'}</div></div>
     <div class="mini"><div class="k">剩餘里程</div><div class="v">${s.devices.some((d) => d.type === 'ecu' && d.fault) ? '— —' : s.environment.rangeKm + ' km'}</div></div>
-    <div class="mini"><div class="k">音響</div><div class="v">${audio ? (audio.mode === 'MUTED' ? '🔇 靜音' : audio.status === 'SHED' ? '已卸載' : audio.on ? '音量 ' + audio.level : '關閉') : '—'}</div></div>
+    <div class="mini"><div class="k">音響</div><div class="v">${audio ? (audio.powerReason === 'EMERGENCY_RESERVE' ? '緊急卸載' : audio.status === 'SHED' || audio.status === 'DEFERRED' ? STATUS_LABEL[audio.status] : audio.mode === 'MUTED' ? '🔇 靜音' : audio.on ? '音量 ' + audio.level : '關閉') : '—'}</div></div>
     <div class="mini"><div class="k">蜂鳴器</div><div class="v">${s.buzzer ? '🔊 警示音' : '靜止'}</div></div>
     <div class="mini"><div class="k">後視鏡盲區 LED</div><div class="v leds">${['left', 'right'].map((side) => {
       const m = s.devices.find((d) => d.type === 'mirror' && d.props && d.props.side === side);
@@ -194,7 +194,8 @@ function renderZones(s) {
           <span class="badge ${d.status}">${STATUS_LABEL[d.status] || d.status}</span><span class="w">${d.drawW} W</span></div>
         <div class="line2"><span class="mode">${esc(d.mode)}</span>
           ${d.powerState !== 'NORMAL' ? `<span>${POWER_STATE_LABEL[d.powerState]}${d.powerState === 'REDUCED' ? `（${d.level}→${d.effectiveLevel} 檔）` : ''}・${REASON_LABEL[d.powerReason] || ''}</span>` : ''}
-          ${d.props && d.props.side ? `<span>${d.props.side === 'left' ? '左' : '右'}側</span>` : ''}</div>
+          ${d.props && d.props.side ? `<span>${d.props.side === 'left' ? '左' : '右'}側</span>` : ''}
+          ${d.props && d.props.position ? `<span>${d.props.position === 'front' ? '前' : '後'}側</span>` : ''}</div>
         ${deviceControls(d)}
       </div>`).join('') : '<p class="empty">此區域尚無設備</p>'}
     </div>`;

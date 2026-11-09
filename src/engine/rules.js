@@ -145,7 +145,7 @@ function computeAlerts(state, power) {
       case 'CALLING': message = `正在撥打 ${service}…`; break;
       case 'CONNECTED': message = `已連線 ${service}，已傳送車輛 GPS 座標與撞擊方向（${dir}）`; break;
       case 'CANCELLED': message = '駕駛已取消緊急通報'; break;
-      case 'FAULT': message = 'eCall 故障，請手動撥打 119（救護）或 110（報案）'; break;
+      case 'FAULT': message = `eCall 故障，請手動撥打 ${ECALL_SERVICE_LABEL[119]} 或 ${ECALL_SERVICE_LABEL[110]}`; break;
       default: message = '';
     }
     alerts.push({ id: 'collision', priority: 1, level: 'critical', title: `${dir}撞擊事故（${incident.impactG} g）`, message });

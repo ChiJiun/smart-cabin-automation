@@ -48,12 +48,35 @@ test('B6: automatic HVAC level changes and defroster switching are written to th
   const { act, s } = setup();
   act('setAmbient', { celsius: -6 });
   const msgs = s().log.map((l) => l.message);
-  assert.ok(msgs.some((m) => /空調系統：自動依溫差調節 1 → 5 檔（60 → 300 W）/.test(m)), msgs.join('\n'));
+  assert.ok(msgs.some((m) => /空調系統：自動依溫差調節 1 → 5 檔（需求 60 → 300 W）/.test(m)), msgs.join('\n'));
   assert.ok(msgs.some((m) => /車外 -6 °C ≤ 3 °C：自動開啟後擋風除霧/.test(m)));
   act('setAmbient', { celsius: 8 });
   assert.ok(s().log.some((l) => /車外 8 °C > 5 °C：自動關閉後擋風除霧/.test(l.message)));
   // a manual level change is a user action, not an automatic adjustment
+  const mark = s().log.length;
   act('setDevice', { id: 'hvac', level: 2 });
   act('setAmbient', { celsius: 40 });
-  assert.ok(!s().log.slice(-3).some((l) => /自動依溫差調節/.test(l.message)));
+  assert.equal(s().devices.find((d) => d.id === 'hvac').level, 2);
+  assert.ok(!s().log.slice(mark).some((l) => /自動依溫差調節/.test(l.message)));
+  // re-enabling auto mode is logged as an automatic adjustment again
+  act('setDevice', { id: 'hvac', auto: true });
+  assert.match(s().log.at(-1).message, /自動依溫差調節 2 → 3 檔（需求 120 → 180 W）/);
+});
+
+test('B6: the defroster rule log is written only for an auto-mode defroster', () => {
+  const { act, s, dev } = setup();
+  act('setDevice', { id: 'defroster', on: false }); // manual override -> auto off
+  const mark = s().log.length;
+  act('setAmbient', { celsius: 1 });
+  assert.equal(dev('defroster').on, false);
+  assert.ok(!s().log.slice(mark).some((l) => /自動開啟後擋風除霧/.test(l.message)));
+});
+
+test('B6: the HVAC auto log shows the rated demand even when the supply is reduced', () => {
+  const { act, s, dev } = setup();
+  act('setCapacity', { watts: 250 });
+  act('setAmbient', { celsius: -6 });
+  assert.equal(dev('hvac').level, 5);
+  assert.equal(dev('hvac').effectiveLevel, 1);
+  assert.ok(s().log.some((l) => /自動依溫差調節 1 → 5 檔（需求 60 → 300 W）/.test(l.message)));
 });

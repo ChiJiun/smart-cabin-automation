@@ -125,6 +125,9 @@ test('B1: driver can cancel eCall during the countdown only', () => {
   e.tick(20);
   assert.equal(dev('ecall').mode, 'CANCELLED');
   assert.throws(() => act('cancelEcall'), /倒數/);
+  assert.throws(() => act('selectEcall', { service: '110' }), /倒數期間/);
+  assert.equal(dev('ecall').mode, 'CANCELLED');
+  assert.throws(() => setup().act('selectEcall', { service: '119' }), /沒有事故/);
 });
 
 test('B1: clearing the incident restores previous settings', () => {
@@ -145,5 +148,64 @@ test('B1: front dashcam fault -> rear dashcam uploads; eCall fault -> manual 119
   assert.equal(s().incident.uploadSource, 'dashcam-rear');
   assert.equal(dev('dashcam-rear').mode, 'UPLOADING');
   assert.equal(s().incident.ecallState, 'FAULT');
-  assert.match(s().mainAlert.message, /手動撥打 119.*110/);
+  assert.match(s().mainAlert.message, /手動撥打 119（救護） 或 110（警政）/);
+  assert.throws(() => act('selectEcall', { service: '119' }), /倒數期間/);
+  assert.equal(s().incident.ecallState, 'FAULT');
+});
+
+test('B1: an eCall fault during the countdown interrupts the call instead of connecting', () => {
+  const { e, act, s, dev } = setup();
+  act('impact', { g: 6 });
+  e.tick(3);
+  act('setFault', { id: 'ecall', fault: true });
+  assert.throws(() => act('selectEcall', { service: '110' }), /故障/);
+  e.tick(8);
+  assert.equal(s().incident.ecallState, 'FAULT');
+  assert.equal(dev('ecall').mode, 'FAULT');
+  assert.match(s().mainAlert.message, /請手動撥打/);
+  assert.ok(s().log.some((l) => /自動通報中斷/.test(l.message)));
+});
+
+test('B1: the upload restarts on another dashcam when the source faults or is deleted', () => {
+  const { e, act, s, dev } = setup();
+  act('impact', { g: 6, direction: 'rear' });
+  e.tick(3);
+  assert.equal(s().incident.uploadProgress, 30);
+  act('setFault', { id: 'dashcam-rear', fault: true });
+  e.tick(1);
+  assert.equal(s().incident.uploadSource, 'dashcam-front');
+  assert.equal(s().incident.uploadProgress, 0);
+  assert.equal(dev('dashcam-front').mode, 'UPLOADING');
+  assert.ok(s().log.some((l) => /「後行車記錄器」上傳中故障，改由「前行車記錄器」重新上傳影像/.test(l.message)));
+  e.deleteDevice('dashcam-front');
+  assert.equal(s().incident.uploadSource, null);
+  assert.ok(s().log.some((l) => /已無可用的行車記錄器/.test(l.message)));
+});
+
+test('B1: a side without any collision sensor cannot report an impact', () => {
+  const { e, act, s } = setup();
+  e.deleteDevice('g-sensor-rear');
+  act('impact', { g: 6, direction: 'rear' });
+  assert.equal(s().incident.active, false);
+  assert.match(s().log.at(-1).message, /後方未配置碰撞傳感器/);
+  act('impact', { g: 6, direction: 'front' });
+  assert.equal(s().incident.active, true);
+});
+
+test('B1: a countdown of 0 s dials 119 + 110 immediately', () => {
+  const { e, act, s } = setup();
+  e.updateSettings({ ecallCountdownS: 0 });
+  act('impact', { g: 6 });
+  assert.equal(s().incident.ecallState, 'CONNECTED');
+  assert.equal(s().incident.ecallService, 'both');
+});
+
+test('B1: the rear-collision scenario loads a rear impact with the rear dashcam uploading', () => {
+  const { e, s, dev } = setup();
+  e.loadScenario('collision-rear');
+  assert.equal(s().incident.direction, 'rear');
+  assert.equal(s().incident.uploadSource, 'dashcam-rear');
+  assert.match(s().mainAlert.title, /後方撞擊事故（5.5 g）/);
+  assert.equal(dev('seat-driver').powerState, 'SHED');
+  assert.equal(dev('seat-driver').powerReason, 'EMERGENCY_RESERVE');
 });

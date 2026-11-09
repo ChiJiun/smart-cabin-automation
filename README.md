@@ -42,7 +42,7 @@ docs/PROPOSAL.md          提案逐字轉錄（功能需求依據）
 
 | 行為 | 觸發 | 連鎖反應 |
 |---|---|---|
-| 1 前／後撞擊 | `impact { g, direction: front \| rear }`，g ≥ 4.0 且該側碰撞傳感器正常 | 儀表紅色警告並標記碰撞方向；全部記錄器 EMERGENCY_LOCK，受撞擊側記錄器優先 UPLOADING（10 秒）；eCall 10 秒倒數，可選擇撥打 119 或 110（`selectEcall`）或取消；倒數結束未選擇則撥 119 並通報 110；CONNECTED 時傳送 GPS 與撞擊方向；P2／P3 與音響強制關閉 |
+| 1 前／後撞擊 | `impact { g, direction: front \| rear }`，g ≥ 4.0 且該側至少一顆碰撞傳感器正常（無傳感器或全部故障則不偵測） |\| rear }`，g ≥ 4.0 且該側碰撞傳感器正常 | 儀表紅色警告並標記碰撞方向；全部記錄器 EMERGENCY_LOCK，受撞擊側記錄器優先 UPLOADING（10 秒）；eCall 10 秒倒數，可選擇撥打 119 或 110（`selectEcall`）或取消；倒數結束未選擇則撥 119 並通報 110；CONNECTED 時傳送 GPS 與撞擊方向；P2／P3 與音響強制關閉 |
 | 2 救護車 | `siren { active, direction }` | 音響 MUTED（保留原音量）、儀表顯示方位、笛聲結束自動恢復 |
 | 3 盲區 | 盲區 DETECTED ＋ 同側方向燈 | 該側後視鏡 LED FLASHING、蜂鳴器；僅有車未打燈 → LED 恆亮 |
 | 4 低里程 | 里程 ≤ 30 km（≤ 10 km 為 CRITICAL_RANGE） | 以里程 × 0.9 篩選可抵達加油站，依距離排序並可設定導航 |

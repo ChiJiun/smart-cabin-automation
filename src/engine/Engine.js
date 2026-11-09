@@ -158,7 +158,7 @@ class Engine extends EventEmitter {
   _snapshot() {
     const s = this.state;
     const devices = {};
-    for (const d of s.devices) devices[d.id] = { mode: d.mode, powerState: d.powerState, effectiveLevel: d.effectiveLevel, level: d.level, auto: d.auto, drawW: d.drawW, name: d.name };
+    for (const d of s.devices) devices[d.id] = { mode: d.mode, powerState: d.powerState, effectiveLevel: d.effectiveLevel, level: d.level, auto: d.auto, ratedW: d.ratedW, name: d.name };
     return { devices, powerStatus: s.power.status, alerts: s.alerts.map((a) => a.id + '|' + a.title) };
   }
 
@@ -172,7 +172,8 @@ class Engine extends EventEmitter {
       if (!p) continue;
       if (p.mode !== d.mode) this._log('device', `${d.name}：${p.mode} → ${d.mode}`);
       // Behavior 6: a level chosen by the climate rule (auto mode) is logged so the TA can trace it.
-      if (d.auto && p.auto && p.level !== d.level) this._log('rule', `${d.name}：自動依溫差調節 ${p.level} → ${d.level} 檔（${p.drawW} → ${d.drawW} W）`);
+      // Watts are the level's rated demand; actual (possibly reduced) supply is covered by the power log.
+      if (d.auto && p.level !== d.level) this._log('rule', `${d.name}：自動依溫差調節 ${p.level} → ${d.level} 檔（需求 ${p.level * d.ratedW} → ${d.level * d.ratedW} W）`);
       if (p.powerState !== d.powerState || p.effectiveLevel !== d.effectiveLevel) {
         if (p.powerState !== d.powerState || d.powerState === 'REDUCED') {
           const lvl = d.powerState === 'REDUCED' ? `（檔位 ${d.effectiveLevel}）` : '';
@@ -206,6 +207,12 @@ class Engine extends EventEmitter {
     const inc = this.state.incident;
     const st = this.state.settings;
     if (!inc.active) return;
+    // The eCall module failing mid-way interrupts the call: the driver must dial manually.
+    if ((inc.ecallState === 'COUNTDOWN' || inc.ecallState === 'CALLING') && this._ecallFaulted()) {
+      inc.ecallState = 'FAULT';
+      inc.ecallRemainingS = 0;
+      this._log('rule', 'eCall 模組故障，自動通報中斷：請手動撥打 119（救護）或 110（警政）');
+    }
     if (inc.ecallState === 'COUNTDOWN') {
       inc.ecallRemainingS -= 1;
       if (inc.ecallRemainingS <= 0) {
@@ -221,8 +228,29 @@ class Engine extends EventEmitter {
     }
     if (inc.uploadSource && inc.uploadProgress < 100) {
       const src = this.state.devices.find((d) => d.id === inc.uploadSource);
-      if (src && !src.fault) inc.uploadProgress = Math.min(100, inc.uploadProgress + 100 / st.uploadDurationS);
+      if (src && src.fault) this._reassignUploadSource(`「${src.name}」上傳中故障`);
+      else if (src) inc.uploadProgress = Math.min(100, inc.uploadProgress + 100 / st.uploadDurationS);
     }
+  }
+
+  _ecallFaulted() {
+    const ecall = this.state.devices.find((d) => d.type === 'ecall');
+    return !ecall || ecall.fault;
+  }
+
+  /** Dashcam on the struck side first, then any healthy dashcam. */
+  _pickUploadSource(direction) {
+    const cams = this.state.devices.filter((d) => d.type === 'dashcam' && !d.fault);
+    return cams.find((d) => d.props.position === direction) || cams[0] || null;
+  }
+
+  /** The current upload source is gone (deleted or faulted): restart the upload on another dashcam. */
+  _reassignUploadSource(reason) {
+    const inc = this.state.incident;
+    const next = this._pickUploadSource(inc.direction);
+    inc.uploadSource = next ? next.id : null;
+    inc.uploadProgress = 0;
+    this._log('rule', next ? `${reason}，改由「${next.name}」重新上傳影像` : `${reason}，已無可用的行車記錄器`);
   }
 
   /** Start dialling the selected service; connects immediately when ecallConnectS is 0. */
@@ -263,11 +291,13 @@ class Engine extends EventEmitter {
         const dirLabel = rules.DIRECTION_LABEL[direction];
         const st = this.state.settings;
         const inc = this.state.incident;
-        // The impact is reported by the collision sensor on the struck side; if every sensor on
-        // that side is faulted the impact is not detected.
-        const sensors = this.state.devices.filter((d) => d.type === 'g_sensor' && d.props.position === direction);
-        if (sensors.length && sensors.every((d) => d.fault)) {
-          this._log('event', `${dirLabel}碰撞傳感器故障，${dirLabel}撞擊 ${g} g 未被偵測`);
+        // The impact is reported by a collision sensor covering the struck side (a sensor without a
+        // position covers both). With no healthy sensor on that side nothing reports the impact.
+        const sensors = this.state.devices.filter((d) => d.type === 'g_sensor' && (!d.props.position || d.props.position === direction));
+        if (!sensors.some((d) => !d.fault)) {
+          this._log('event', sensors.length
+            ? `${dirLabel}碰撞傳感器故障，${dirLabel}撞擊 ${g} g 未被偵測`
+            : `${dirLabel}未配置碰撞傳感器，${dirLabel}撞擊 ${g} g 未被偵測`);
           return;
         }
         if (g < st.impactThresholdG) {
@@ -278,17 +308,13 @@ class Engine extends EventEmitter {
           this._log('event', `事故進行中再次偵測到${dirLabel}衝擊 ${g} g（已記錄）`);
           return;
         }
-        const ecall = this.state.devices.find((d) => d.type === 'ecall');
-        // The dashcam on the struck side uploads first; fall back to any healthy dashcam.
-        const sameSide = this.state.devices.find((d) => d.type === 'dashcam' && d.props.position === direction && !d.fault);
-        const anyCam = this.state.devices.find((d) => d.type === 'dashcam' && !d.fault);
-        const source = sameSide || anyCam || null;
+        const source = this._pickUploadSource(direction);
         Object.assign(inc, {
           active: true,
           direction,
           impactG: g,
           startedAt: this.state.simTime,
-          ecallState: !ecall || ecall.fault ? 'FAULT' : 'COUNTDOWN',
+          ecallState: this._ecallFaulted() ? 'FAULT' : 'COUNTDOWN',
           ecallService: null,
           ecallRemainingS: st.ecallCountdownS,
           callStartedAt: null,
@@ -300,13 +326,20 @@ class Engine extends EventEmitter {
         if (source && source.props.position === direction) this._log('rule', `受撞擊側（${dirLabel}）記錄器「${source.name}」優先上傳影像，其餘記錄器進入 EMERGENCY_LOCK`);
         if (source && source.props.position !== direction) this._log('rule', `${dirLabel}記錄器無法使用，改由「${source.name}」上傳影像`);
         if (!source) this._log('rule', '沒有可用的行車記錄器，無法上傳影像');
-        if (inc.ecallState === 'COUNTDOWN') this._log('rule', `eCall ${st.ecallCountdownS} 秒倒數開始：可選擇撥打 119（救護）或 110（警政），或取消通報`);
         this._log('rule', '緊急電力保留：卸載所有 P2／P3 設備與音響');
+        if (inc.ecallState === 'COUNTDOWN' && st.ecallCountdownS <= 0) {
+          inc.ecallService = 'both';
+          this._log('rule', `eCall 倒數設為 0 秒：立即撥打 ${rules.ECALL_SERVICE_LABEL.both}`);
+          this._startCall();
+        } else if (inc.ecallState === 'COUNTDOWN') {
+          this._log('rule', `eCall ${st.ecallCountdownS} 秒倒數開始：可選擇撥打 119（救護）或 110（警政），或取消通報`);
+        }
       },
       selectEcall(a) {
         const inc = this.state.incident;
         assert(inc.active, '目前沒有事故');
         assert(inc.ecallState === 'COUNTDOWN', '只有在倒數期間可以選擇撥打對象');
+        assert(!this._ecallFaulted(), 'eCall 模組故障，請手動撥打');
         const service = String(a.service);
         assert(service === '119' || service === '110', 'service 必須是 119 或 110');
         inc.ecallService = service;
@@ -380,8 +413,10 @@ class Engine extends EventEmitter {
         if (t <= st.defrostOnC) this.state.climate.defrostActive = true;
         else if (t > st.defrostOffC) this.state.climate.defrostActive = false;
         this._log('event', `車外溫度變為 ${t} °C`);
-        if (!was && this.state.climate.defrostActive) this._log('rule', `車外 ${t} °C ≤ ${st.defrostOnC} °C：自動開啟後擋風除霧`);
-        if (was && !this.state.climate.defrostActive) this._log('rule', `車外 ${t} °C > ${st.defrostOffC} °C：自動關閉後擋風除霧`);
+        // Only an auto-mode defroster follows the rule; a manually overridden one is left alone.
+        const autoDefroster = this.state.devices.some((d) => d.type === 'defroster' && d.auto && !d.fault);
+        if (autoDefroster && !was && this.state.climate.defrostActive) this._log('rule', `車外 ${t} °C ≤ ${st.defrostOnC} °C：自動開啟後擋風除霧`);
+        if (autoDefroster && was && !this.state.climate.defrostActive) this._log('rule', `車外 ${t} °C > ${st.defrostOffC} °C：自動關閉後擋風除霧`);
       },
       // devices
       setDevice(a) {
@@ -553,8 +588,8 @@ class Engine extends EventEmitter {
     assert(idx >= 0, `找不到設備：${id}`);
     const [cfg] = this.config.devices.splice(idx, 1);
     this.state.devices = this.state.devices.filter((d) => d.id !== id);
-    if (this.state.incident.uploadSource === id) this.state.incident.uploadSource = null;
     this._log('config', `刪除設備：${cfg.name}`);
+    if (this.state.incident.uploadSource === id) this._reassignUploadSource(`「${cfg.name}」已移除`);
     this.evaluate();
   }
 
@@ -601,7 +636,7 @@ class Engine extends EventEmitter {
 const SCENARIOS = {
   'winter-overload': {
     label: '寒流夜間長途（電力超載）',
-    description: '車外 −6 °C，三個座椅加熱 3 檔、逆變器 200 W、兩台後座螢幕、音響 5 檔 → 需求 1288 W，卸載 P3 後降為 958 W',
+    description: '車外 −6 °C，三個座椅加熱 3 檔、逆變器 200 W、兩台後座螢幕、音響 5 檔 → 需求 1293 W，卸載 P3 後降為 963 W',
     actions: [
       { type: 'setAmbient', celsius: -6 },
       { type: 'setDevice', id: 'seat-driver', on: true, level: 3 },

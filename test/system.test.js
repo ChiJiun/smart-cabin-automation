@@ -18,8 +18,16 @@ test('reset restores the known initial state but keeps configuration', () => {
   assert.equal(s().settings.capacityW, 1000);
   assert.equal(s().environment.rangeKm, 120);
   assert.ok(s().devices.some((d) => d.id === 'fridge-2'));
+  e.updateSettings({ capacityW: 500, ecallConnectS: 7 });
+  e.updateDevice('audio', { priority: 1 });
   act('factoryReset');
   assert.ok(!s().devices.some((d) => d.id === 'fridge-2'));
+  // configuration is reloaded from the built-in JSON data file
+  const json = require('../src/config/defaultVehicle.json');
+  assert.deepEqual(s().settings, json.settings);
+  assert.equal(s().devices.find((d) => d.id === 'audio').priority, 3);
+  assert.equal(s().devices.length, json.devices.length);
+  assert.equal(s().power.demandW, 208);
 });
 
 test('config: device priority affects shedding; safety devices locked to P0', () => {
