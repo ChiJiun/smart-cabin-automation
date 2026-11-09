@@ -55,6 +55,15 @@ function render(s) {
   renderLog(s);
 }
 
+function audioCardText(audio) {
+  if (!audio) return '—';
+  if (audio.fault) return '故障';
+  if (audio.powerReason === 'EMERGENCY_RESERVE') return '緊急卸載';
+  if (audio.status === 'SHED' || audio.status === 'DEFERRED') return STATUS_LABEL[audio.status];
+  if (audio.mode === 'MUTED') return '🔇 靜音';
+  return audio.on ? '音量 ' + audio.level : '關閉';
+}
+
 const fmtTime = (t) => `T+${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
 
 function renderClock(s) {
@@ -94,8 +103,8 @@ function renderCockpit(s) {
       </div>
       ${inc.ecallState === 'COUNTDOWN' ? '<p class="hint">倒數結束未選擇時，自動撥打 119 並通報 110。</p>' : ''}
       ${inc.ecallState === 'CONNECTED' ? `<p class="hint">已傳送 GPS：${s.environment.position.lat.toFixed(4)}, ${s.environment.position.lng.toFixed(4)}・撞擊方向：${esc(dirLabel)}・衝擊 ${inc.impactG} g</p>` : ''}
-      <div class="hint" style="margin-top:8px">影像雲端存證${upName ? `（${struckSide ? `受撞擊側 ${esc(upName)}` : `${esc(dirLabel)}記錄器無法使用，改由 ${esc(upName)}`}）` : ''}：${upName ? Math.round(inc.uploadProgress) + '%' : '無可用記錄器'}${upName ? '・其餘記錄器 EMERGENCY_LOCK 鎖定保存' : ''}</div>
-      <div class="progress"><div style="width:${upName ? inc.uploadProgress : 0}%"></div></div>
+      <div class="hint" style="margin-top:8px">影像雲端存證${upName ? `（${struckSide ? `受撞擊側 ${esc(upName)}` : `${esc(dirLabel)}記錄器無法使用，改由 ${esc(upName)}`}）` : ''}：${upName ? Math.round(inc.uploadProgress) + '%' : inc.uploadDone ? '100%（已完成，來源記錄器已移除）' : '無可用記錄器'}${upName ? '・其餘記錄器 EMERGENCY_LOCK 鎖定保存' : ''}</div>
+      <div class="progress"><div style="width:${upName || inc.uploadDone ? inc.uploadProgress : 0}%"></div></div>
     </div>`;
   }
 
@@ -105,7 +114,7 @@ function renderCockpit(s) {
     <div class="mini"><div class="k">車外溫度</div><div class="v">${s.environment.ambientTempC} °C</div></div>
     <div class="mini"><div class="k">空調</div><div class="v">${hvac ? (hvac.powerState === 'NORMAL' || hvac.powerState === 'REDUCED' ? `${hvac.mode === 'HEATING' ? '暖氣' : hvac.mode === 'COOLING' ? '冷氣' : hvac.mode === 'OFF' ? '關閉' : '送風'} ${hvac.on ? hvac.effectiveLevel + ' 檔' : ''}` : STATUS_LABEL[hvac.status]) : '—'}</div></div>
     <div class="mini"><div class="k">剩餘里程</div><div class="v">${s.devices.some((d) => d.type === 'ecu' && d.fault) ? '— —' : s.environment.rangeKm + ' km'}</div></div>
-    <div class="mini"><div class="k">音響</div><div class="v">${audio ? (audio.powerReason === 'EMERGENCY_RESERVE' ? '緊急卸載' : audio.status === 'SHED' || audio.status === 'DEFERRED' ? STATUS_LABEL[audio.status] : audio.mode === 'MUTED' ? '🔇 靜音' : audio.on ? '音量 ' + audio.level : '關閉') : '—'}</div></div>
+    <div class="mini"><div class="k">音響</div><div class="v">${audioCardText(audio)}</div></div>
     <div class="mini"><div class="k">蜂鳴器</div><div class="v">${s.buzzer ? '🔊 警示音' : '靜止'}</div></div>
     <div class="mini"><div class="k">後視鏡盲區 LED</div><div class="v leds">${['left', 'right'].map((side) => {
       const m = s.devices.find((d) => d.type === 'mirror' && d.props && d.props.side === side);
