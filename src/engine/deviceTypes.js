@@ -10,7 +10,7 @@
  * ratedW        : on-power for simple devices, per-level power for adjustable devices.
  */
 const DEVICE_TYPES = {
-  g_sensor: { label: '前碰撞傳感器 (G-Sensor)', fixedPriority: 0, ratedW: 5 },
+  g_sensor: { label: '碰撞傳感器 (G-Sensor)', fixedPriority: 0, ratedW: 5, props: ['position'] },
   dashcam: { label: '行車記錄器 (Dashcam)', fixedPriority: 0, ratedW: 8, uploadW: 48, props: ['position'] },
   turn_signal: { label: '方向燈控制模組', fixedPriority: 0, ratedW: 2, activeW: 40 },
   display: { label: '車載中控儀表', fixedPriority: 0, ratedW: 25 },

@@ -4,9 +4,11 @@ const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const STATUS_LABEL = {
-  NORMAL: '正常', WARNING: '警示', EMERGENCY: '緊急', STANDBY: '待機', OFF: '關閉',
+  NORMAL: '正常', WARNING: '警示', EMERGENCY: '緊急', STANDBY: '待機',
   SHED: '已卸載', DEFERRED: '延後啟動', FAULT: '故障',
 };
+const DIRECTION_LABEL = { front: '前方', rear: '後方', left: '左側', right: '右側' };
+const ECALL_SERVICE_LABEL = { 119: '119（救護）', 110: '110（警政）', both: '119（救護）＋110（警政）' };
 const POWER_LABEL = { NORMAL: '正常', HIGH_LOAD: '高負載', OVERLOAD: '超載・負載管理中', CRITICAL_POWER: '電力危急' };
 const POWER_STATE_LABEL = { REDUCED: '降載', SHED: '已卸載', DEFERRED: '延後啟動' };
 const REASON_LABEL = { OVERLOAD: '超載', EMERGENCY_RESERVE: '緊急電力保留' };
@@ -75,15 +77,24 @@ function renderCockpit(s) {
 
   const inc = s.incident;
   if (inc.active) {
-    const upName = inc.uploadSource ? (s.devices.find((d) => d.id === inc.uploadSource) || {}).name : null;
+    const upDev = inc.uploadSource ? s.devices.find((d) => d.id === inc.uploadSource) : null;
+    const upName = upDev ? upDev.name : null;
+    const struckSide = upDev && upDev.props && upDev.props.position === inc.direction;
+    const dirLabel = DIRECTION_LABEL[inc.direction] || '';
+    const service = ECALL_SERVICE_LABEL[inc.ecallService] || '119 / 110';
     html += `<div class="ecall">
+      <div class="dir-tag">碰撞方向：${esc(dirLabel)}${inc.direction === 'front' ? '（前側）' : inc.direction === 'rear' ? '（後側）' : ''}・衝擊 ${inc.impactG} g</div>
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
-        <div><div class="k">eCall 緊急通報（119 / 110）</div>
+        <div><div class="k">eCall 緊急通報${inc.ecallService ? `：${esc(service)}` : '（119 / 110）'}</div>
           <div class="count">${inc.ecallState === 'COUNTDOWN' ? inc.ecallRemainingS + ' 秒' : esc(ECALL_LABEL[inc.ecallState] || inc.ecallState)}</div></div>
-        ${inc.ecallState === 'COUNTDOWN' ? '<button class="btn danger" data-act="cancelEcall">我沒事，取消通報</button>' : ''}
+        ${inc.ecallState === 'COUNTDOWN' ? `<div class="ecall-actions">
+          <button class="btn danger" data-act="selectEcall" data-service="119">撥打 119（救護）</button>
+          <button class="btn danger" data-act="selectEcall" data-service="110">撥打 110（警政）</button>
+          <button class="btn" data-act="cancelEcall">我沒事，取消通報</button></div>` : ''}
       </div>
-      ${inc.ecallState === 'CONNECTED' ? `<p class="hint">已傳送 GPS：${s.environment.position.lat.toFixed(4)}, ${s.environment.position.lng.toFixed(4)}・衝擊 ${inc.impactG} g</p>` : ''}
-      <div class="hint" style="margin-top:8px">影像雲端存證${upName ? `（${esc(upName)}）` : ''}：${upName ? Math.round(inc.uploadProgress) + '%' : '無可用記錄器'}</div>
+      ${inc.ecallState === 'COUNTDOWN' ? '<p class="hint">倒數結束未選擇時，自動撥打 119 並通報 110。</p>' : ''}
+      ${inc.ecallState === 'CONNECTED' ? `<p class="hint">已傳送 GPS：${s.environment.position.lat.toFixed(4)}, ${s.environment.position.lng.toFixed(4)}・撞擊方向：${esc(dirLabel)}・衝擊 ${inc.impactG} g</p>` : ''}
+      <div class="hint" style="margin-top:8px">影像雲端存證${upName ? `（${struckSide ? `受撞擊側 ${esc(upName)}` : `${esc(dirLabel)}記錄器無法使用，改由 ${esc(upName)}`}）` : ''}：${upName ? Math.round(inc.uploadProgress) + '%' : '無可用記錄器'}${upName ? '・其餘記錄器 EMERGENCY_LOCK 鎖定保存' : ''}</div>
       <div class="progress"><div style="width:${upName ? inc.uploadProgress : 0}%"></div></div>
     </div>`;
   }
@@ -96,6 +107,12 @@ function renderCockpit(s) {
     <div class="mini"><div class="k">剩餘里程</div><div class="v">${s.devices.some((d) => d.type === 'ecu' && d.fault) ? '— —' : s.environment.rangeKm + ' km'}</div></div>
     <div class="mini"><div class="k">音響</div><div class="v">${audio ? (audio.mode === 'MUTED' ? '🔇 靜音' : audio.status === 'SHED' ? '已卸載' : audio.on ? '音量 ' + audio.level : '關閉') : '—'}</div></div>
     <div class="mini"><div class="k">蜂鳴器</div><div class="v">${s.buzzer ? '🔊 警示音' : '靜止'}</div></div>
+    <div class="mini"><div class="k">後視鏡盲區 LED</div><div class="v leds">${['left', 'right'].map((side) => {
+      const m = s.devices.find((d) => d.type === 'mirror' && d.props && d.props.side === side);
+      const mode = m ? (m.fault ? 'FAULT' : m.mode) : 'NONE';
+      const label = { FLASHING: '快速閃爍', STEADY: '恆亮', IDLE: '熄滅', FAULT: '故障', NONE: '—' }[mode] || mode;
+      return `<span class="led-wrap" title="${side === 'left' ? '左' : '右'}後視鏡：${label}"><i class="led ${mode}"></i>${side === 'left' ? '左' : '右'}</span>`;
+    }).join('')}</div></div>
   </div>`;
 
   const nav = s.navigation;
@@ -207,7 +224,10 @@ function renderConsole(s) {
   for (const v of ['left', 'off', 'right']) $(`#ts${v[0].toUpperCase() + v.slice(1)}`).classList.toggle('on', s.sensors.turnSignal === v);
   $('#btnAlt').classList.toggle('on', s.power.alternatorFault);
   $('#btnAlt').textContent = s.power.alternatorFault ? '發電機故障中（點擊恢復）' : '發電機故障';
-  $('#btnCancelEcall').disabled = !(s.incident.active && s.incident.ecallState === 'COUNTDOWN');
+  const canChoose = s.incident.active && s.incident.ecallState === 'COUNTDOWN';
+  $('#btnCancelEcall').disabled = !canChoose;
+  $('#btnEcall119').disabled = !canChoose;
+  $('#btnEcall110').disabled = !canChoose;
   $('#btnClearIncident').disabled = !s.incident.active;
   const amb = $('#ambient');
   if (document.activeElement !== amb) amb.value = s.environment.ambientTempC;
@@ -234,7 +254,8 @@ document.addEventListener('click', (e) => {
     return act({ type: 'setDevice', id: d.id, on: !d.on });
   }
   switch (b.dataset.act) {
-    case 'impact': return act({ type: 'impact', g: Number($('#impactG').value) });
+    case 'impact': return act({ type: 'impact', g: Number($('#impactG').value), direction: b.dataset.dir || 'front' });
+    case 'selectEcall': return act({ type: 'selectEcall', service: b.dataset.service });
     case 'cancelEcall': return act({ type: 'cancelEcall' });
     case 'clearIncident': return act({ type: 'clearIncident' });
     case 'sirenOn': return act({ type: 'siren', active: true, direction: $('#sirenDir').value });

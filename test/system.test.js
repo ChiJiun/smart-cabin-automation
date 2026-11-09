@@ -72,3 +72,17 @@ test('HTTP API: actions, validation errors and config endpoints', async () => {
     server.close();
   }
 });
+
+test('device status is always one of the seven proposal statuses', () => {
+  const { e, act, s } = setup();
+  const { STATUSES } = require('../src/engine/rules');
+  const check = () => { for (const d of s().devices) assert.ok(STATUSES.includes(d.status), `${d.id}: ${d.status}`); };
+  check();
+  assert.equal(s().devices.find((d) => d.id === 'seat-driver').status, 'STANDBY'); // switched off = standby
+  e.loadScenario('alternator-fault');
+  check();
+  act('impact', { g: 6, direction: 'rear' });
+  act('setFault', { id: 'ecu', fault: true });
+  check();
+  assert.ok(s().devices.every((d) => d.status !== 'OFF'));
+});
