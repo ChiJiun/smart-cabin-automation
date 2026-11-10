@@ -49,7 +49,8 @@ function setHtml(el, html) {
   lastHtml.set(el, html);
   el.innerHTML = html;
   if (key) {
-    const again = el.querySelector(key);
+    // The same control, or the one that replaced it in place (e.g. "設定導航" -> "導航中・取消").
+    const again = el.querySelector(key.sel) || (key.group && el.querySelector(`[data-focus-group="${CSS.escape(key.group)}"]`));
     if (again) {
       restoringFocus = true;
       again.focus({ preventScroll: true });
@@ -64,7 +65,7 @@ function focusKey(el) {
   if (!a || a === el || !el.contains(a)) return null;
   const attrs = [...a.attributes].filter((x) => x.name.startsWith('data-'));
   if (!attrs.length) return null;
-  return a.tagName.toLowerCase() + attrs.map((x) => `[${x.name}="${CSS.escape(x.value)}"]`).join('');
+  return { sel: a.tagName.toLowerCase() + attrs.map((x) => `[${x.name}="${CSS.escape(x.value)}"]`).join(''), group: a.dataset.focusGroup || null };
 }
 
 function holdAt(target) {
@@ -95,6 +96,8 @@ document.addEventListener('click', () => releaseHolds(0), true); // fires after 
 document.addEventListener('keydown', (e) => { if (isActivationKey(e)) holdAt(e.target); }, true);
 document.addEventListener('keyup', (e) => { if (isActivationKey(e)) releaseHolds(0); }, true);
 window.addEventListener('blur', () => releaseHolds(0));
+// A context menu (right click, long press) may swallow the pointerup.
+document.addEventListener('contextmenu', () => releaseHolds(0), true);
 
 // After a rejected action the controls may show a value the server never accepted (a typed load,
 // a toggled checkbox) while the HTML string is unchanged, so drop the cache and redraw from state.
@@ -313,7 +316,7 @@ function navigationHtml(s, rangeUnknown) {
       html += '<div class="table-wrap"><table><thead><tr><th>站名</th><th>距離</th><th>預估抵達消耗</th><th>抵達後剩餘</th><th></th></tr></thead><tbody>';
       html += reachable.map((st) => `<tr class="${st.id === nav.targetId ? 'target' : ''}">
         <td>${esc(st.name)}</td><td>${st.distanceKm} km</td><td>${st.fuelL} L</td><td>${st.rangeOnArrivalKm} km</td>
-        <td>${st.id === nav.targetId ? '<button class="btn sm on" data-act="cancelNav">導航中・取消</button>' : `<button class="btn sm" data-nav="${st.id}">設定導航</button>`}</td></tr>`).join('');
+        <td>${st.id === nav.targetId ? '<button class="btn sm on" data-act="cancelNav" data-focus-group="nav-' + esc(st.id) + '">導航中・取消</button>' : `<button class="btn sm" data-nav="${st.id}" data-focus-group="nav-${esc(st.id)}">設定導航</button>`}</td></tr>`).join('');
       html += '</tbody></table></div>';
     } else {
       html += '<p class="hint"><b>附近無可抵達加油站，建議聯絡道路救援。</b></p>';

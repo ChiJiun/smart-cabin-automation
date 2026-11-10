@@ -216,9 +216,12 @@ class Engine extends EventEmitter {
       // is covered by the power log.
       if (d.auto && p.level !== d.level) this._log('rule', `${d.name}：自動依溫差調節 ${p.level} → ${d.level} 檔（需求 ${p.level * d.ratedW} → ${d.level * d.ratedW} W）`);
       if (d.type === 'defroster' && d.auto && p.on !== d.on) {
-        this._log('rule', d.on
-          ? `車外 ${ambientTempC} °C ≤ ${st.defrostOnC} °C：自動開啟${d.name}`
-          : `車外 ${ambientTempC} °C > ${st.defrostOffC} °C：自動關閉${d.name}`);
+        // Inside the hysteresis band (on-threshold < T <= off-threshold) the rule keeps the last decision,
+        // e.g. when a defroster is switched back to auto there.
+        let why;
+        if (d.on) why = ambientTempC <= st.defrostOnC ? `車外 ${ambientTempC} °C ≤ ${st.defrostOnC} °C` : `車外 ${ambientTempC} °C 在遲滯區間（> ${st.defrostOffC} °C 才關閉）`;
+        else why = ambientTempC > st.defrostOffC ? `車外 ${ambientTempC} °C > ${st.defrostOffC} °C` : `車外 ${ambientTempC} °C 在遲滯區間（≤ ${st.defrostOnC} °C 才開啟）`;
+        this._log('rule', `${why}：自動${d.on ? '開啟' : '關閉'}${d.name}`);
       }
       if (p.mode !== d.mode) this._log('device', `${d.name}：${p.mode} → ${d.mode}`);
       if (p.powerState !== d.powerState || p.effectiveLevel !== d.effectiveLevel) {
