@@ -108,3 +108,18 @@ test('B3: a cleared alert is logged with the title the driver saw, not its inter
   assert.ok(msgs.includes('警示解除：左側盲區有來車'));
   assert.ok(!msgs.some((m) => m.includes('blindspot-left')));
 });
+
+test('B3: with a working spare radar on the same side only the faulted unit is reported', () => {
+  const { e, act, s } = setup();
+  e.addDevice({ id: 'radar-left-2', type: 'bsd_radar', name: '左盲區雷達（備援）', zone: 'side_rear', props: { side: 'left' } });
+  act('setFault', { id: 'radar-left', fault: true });
+  assert.ok(!s().alerts.some((a) => a.title === '左側盲區輔助失效'));
+  assert.ok(s().alerts.some((a) => a.title === '左盲區雷達 故障' && a.message === '同類備援設備仍在運作'));
+  act('blindSpot', { side: 'left', detected: true });
+  act('turnSignal', { value: 'left' });
+  assert.ok(s().alerts.some((a) => a.id === 'blindspot-left'));
+  // A faulted mirror on a side whose radar is also out does not promise dashboard warnings.
+  act('setFault', { id: 'radar-left-2', fault: true });
+  act('setFault', { id: 'mirror-left', fault: true });
+  assert.equal(s().alerts.find((a) => a.id === 'fault-mirror-left').message, '左電子後視鏡 故障');
+});

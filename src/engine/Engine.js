@@ -24,12 +24,44 @@ function assert(cond, message) {
   if (!cond) throw new ValidationError(message);
 }
 
-function num(value, name, { min = -Infinity, max = Infinity } = {}) {
+function num(value, name, { min = -Infinity, max = Infinity, integer = false } = {}) {
   const n = Number(value);
-  assert(value !== '' && value !== null && value !== undefined && Number.isFinite(n), `${name} 必須是數字`);
+  const given = typeof value === 'number' || (typeof value === 'string' && value.trim() !== '');
+  assert(given && Number.isFinite(n), `${name} 必須是數字`);
   assert(n >= min && n <= max, `${name} 必須介於 ${min} 與 ${max} 之間`);
+  if (integer) assert(Number.isInteger(n), `${name} 必須是整數`);
   return n;
 }
+
+function bool(value, name) {
+  assert(typeof value === 'boolean', `${name} 必須是 true 或 false`);
+  return value;
+}
+
+// Lookup tables are plain objects: only their own keys are valid (not "constructor", "__proto__"...).
+const own = (obj, key) => typeof key === 'string' && Object.prototype.hasOwnProperty.call(obj, key);
+
+// Ids become object keys (snapshots, lookups), so names inherited from Object.prototype are refused.
+const RESERVED_ID = (id) => id in Object.prototype;
+
+// Valid range and label of each system setting (configuration page).
+const SETTING_RANGES = {
+  capacityW: { label: '發電機容量', min: 0, max: 10000 },
+  batteryW: { label: '電瓶供電容量', min: 0, max: 10000 },
+  highLoadPct: { label: '高負載門檻', min: 1, max: 100 },
+  impactThresholdG: { label: '撞擊閾值', min: 0.1, max: 100 },
+  ecallCountdownS: { label: 'eCall 倒數秒數', min: 0, max: 600, integer: true },
+  ecallConnectS: { label: 'eCall 撥號秒數', min: 0, max: 600, integer: true },
+  uploadDurationS: { label: '影像上傳秒數', min: 1, max: 600, integer: true },
+  lowRangeKm: { label: '低里程門檻', min: 0, max: 1500 },
+  lowRangeClearKm: { label: '低里程解除門檻', min: 0, max: 1500 },
+  criticalRangeKm: { label: '極低里程門檻', min: 0, max: 1500 },
+  reachableFactor: { label: '可抵達係數', min: 0.01, max: 1 },
+  fuelLPerKm: { label: '油耗', min: 0, max: 10 },
+  targetTempC: { label: '目標溫度', min: 10, max: 35 },
+  defrostOnC: { label: '除霧開啟溫度', min: -40, max: 40 },
+  defrostOffC: { label: '除霧關閉溫度', min: -40, max: 40 },
+};
 
 /**
  * Central Incident Logic Unit + Power Manager + Simulation Clock.
@@ -85,7 +117,7 @@ class Engine extends EventEmitter {
 
   _idleIncident() {
     return {
-      active: false, direction: null, impactG: null, startedAt: null,
+      id: null, active: false, direction: null, impactG: null, startedAt: null,
       ecallState: 'STANDBY', ecallService: null, ecallRemainingS: null, callStartedAt: null, connectedAt: null,
       uploadSource: null, uploadProgress: 0, uploadDone: false,
     };
@@ -335,9 +367,9 @@ class Engine extends EventEmitter {
   // ---------------------------------------------------------------- actions
   dispatch(action) {
     assert(action && typeof action.type === 'string', '缺少 action type');
-    const handler = this.actions[action.type];
-    assert(handler, `未知的操作：${action.type}`);
-    handler.call(this, action);
+    const actions = this.actions;
+    assert(own(actions, action.type), `未知的操作：${action.type}`);
+    actions[action.type].call(this, action);
     if (!['tick', 'reset', 'factoryReset', 'scenario'].includes(action.type)) this.evaluate();
     return this.publicState();
   }
@@ -370,7 +402,11 @@ class Engine extends EventEmitter {
           return;
         }
         const source = this._pickUploadSource(direction);
+        // A scenario resets the clock, so startedAt does not identify an incident; this counter does
+        // (it lives on the engine and is not part of the log, so exports stay reproducible).
+        this._incidentSeq = (this._incidentSeq || 0) + 1;
         Object.assign(inc, {
+          id: this._incidentSeq,
           active: true,
           direction,
           impactG: g,
@@ -424,9 +460,9 @@ class Engine extends EventEmitter {
       },
       // Behavior 2
       siren(a) {
-        const active = !!a.active;
+        const active = bool(a.active, 'active');
         const direction = a.direction ?? this.state.sensors.siren.direction;
-        assert(rules.DIRECTION_LABEL[direction], '方位必須是 front / rear / left / right');
+        assert(own(rules.DIRECTION_LABEL, direction), '方位必須是 front / rear / left / right');
         this.state.sensors.siren = { active, direction };
         const dir = rules.DIRECTION_LABEL[direction];
         if (!active) {
@@ -442,7 +478,7 @@ class Engine extends EventEmitter {
       // Behavior 3
       blindSpot(a) {
         assert(a.side === 'left' || a.side === 'right', 'side 必須是 left 或 right');
-        this.state.sensors.blindSpot[a.side] = !!a.detected;
+        this.state.sensors.blindSpot[a.side] = bool(a.detected, 'detected');
         this._log('event', `${a.side === 'left' ? '左' : '右'}側盲區：${a.detected ? '偵測到來車' : '淨空'}`);
       },
       turnSignal(a) {
@@ -485,7 +521,7 @@ class Engine extends EventEmitter {
         this._log('event', `發電機容量設定為 ${this.state.settings.capacityW} W`);
       },
       setAlternatorFault(a) {
-        this.state.power.alternatorFault = !!a.fault;
+        this.state.power.alternatorFault = bool(a.fault, 'fault');
         this._log('event', a.fault ? `發電機故障：改由電瓶供電（${this.state.settings.batteryW} W）` : '發電機恢復正常');
       },
       // Behavior 6
@@ -505,35 +541,40 @@ class Engine extends EventEmitter {
         const d = this.device(a.id);
         const t = getType(d.type);
         assert(t.userControl, `${d.name} 無法手動操作`);
+        // Validate every field before changing anything: a rejected request leaves the device as it was.
+        const on = a.on === undefined ? undefined : bool(a.on, 'on');
+        if (a.level !== undefined) assert(t.adjustable, `${d.name} 沒有檔位`);
+        const level = a.level === undefined ? undefined : num(a.level, '檔位', { min: t.minLevel, max: t.maxLevel, integer: true });
+        if (a.load !== undefined) assert(t.variableLoad, `${d.name} 沒有可調整的負載`);
+        const load = a.load === undefined ? undefined : num(a.load, '負載', { min: 0, max: t.maxLoad });
+        if (a.auto !== undefined) assert(t.auto, `${d.name} 沒有自動模式`);
+        const auto = a.auto === undefined ? undefined : bool(a.auto, 'auto');
+        assert([on, level, load, auto].some((v) => v !== undefined), '沒有要變更的項目');
         const changes = [];
-        if (a.on !== undefined) {
-          const on = !!a.on;
+        if (on !== undefined) {
           if (on && !d.on) d.poweredSinceOn = false;
           d.on = on;
           if (t.auto) d.auto = false;
           changes.push(on ? '開啟' : '關閉');
         }
-        if (a.level !== undefined) {
-          assert(t.adjustable, `${d.name} 沒有檔位`);
-          d.level = num(a.level, '檔位', { min: t.minLevel, max: t.maxLevel });
+        if (level !== undefined) {
+          d.level = level;
           if (t.auto) d.auto = false;
           changes.push(`檔位 ${d.level}`);
         }
-        if (a.load !== undefined) {
-          assert(t.variableLoad, `${d.name} 沒有可調整的負載`);
-          d.load = num(a.load, '負載', { min: 0, max: t.maxLoad });
+        if (load !== undefined) {
+          d.load = load;
           changes.push(`負載 ${d.load} W`);
         }
-        if (a.auto !== undefined) {
-          assert(t.auto, `${d.name} 沒有自動模式`);
-          d.auto = !!a.auto;
+        if (auto !== undefined) {
+          d.auto = auto;
           changes.push(d.auto ? '自動模式' : '手動模式');
         }
         this._log('event', `使用者操作 ${d.name}：${changes.join('、')}`);
       },
       setFault(a) {
         const d = this.device(a.id);
-        d.fault = !!a.fault;
+        d.fault = bool(a.fault, 'fault');
         this._log('event', `${d.name}：${d.fault ? '注入故障' : '故障排除'}`);
       },
       // clock / system
@@ -558,8 +599,8 @@ class Engine extends EventEmitter {
 
   // ---------------------------------------------------------------- scenarios
   loadScenario(name) {
+    assert(own(SCENARIOS, name), `未知的情境：${name}`);
     const sc = SCENARIOS[name];
-    assert(sc, `未知的情境：${name}`);
     this.reset();
     this._log('system', `載入情境：${sc.label}`);
     for (const action of sc.actions) {
@@ -583,6 +624,7 @@ class Engine extends EventEmitter {
 
   addZone({ id, name }) {
     assert(typeof id === 'string' && /^[a-z0-9_-]{1,32}$/.test(id), '區域 ID 只能包含小寫英數、- 或 _');
+    assert(!RESERVED_ID(id), `區域 ID 不可使用保留字：${id}`);
     assert(typeof name === 'string' && name.trim(), '區域名稱不可空白');
     assert(!this.config.zones.some((z) => z.id === id), `區域 ID 已存在：${id}`);
     this.config.zones.push({ id, name: name.trim() });
@@ -620,7 +662,7 @@ class Engine extends EventEmitter {
       out.zone = input.zone;
     }
     if (input.priority !== undefined && input.priority !== null && input.priority !== '') {
-      const p = num(input.priority, '優先等級', { min: 0, max: 3 });
+      const p = num(input.priority, '優先等級', { min: 0, max: 3, integer: true });
       if (t.fixedPriority === 0) assert(p === 0, '安全設備固定為 P0');
       else assert(p >= 1, '非安全設備的優先等級必須是 P1–P3');
       out.priority = p;
@@ -640,8 +682,9 @@ class Engine extends EventEmitter {
   }
 
   addDevice(input) {
-    assert(input && typeof input.type === 'string' && DEVICE_TYPES[input.type], '設備類型無效');
+    assert(input && own(DEVICE_TYPES, input.type), '設備類型無效');
     assert(typeof input.id === 'string' && /^[a-z0-9_-]{1,32}$/.test(input.id), '設備 ID 只能包含小寫英數、- 或 _');
+    assert(!RESERVED_ID(input.id), `設備 ID 不可使用保留字：${input.id}`);
     assert(!this.config.devices.some((d) => d.id === input.id), `設備 ID 已存在：${input.id}`);
     const fields = this._validateDeviceFields(input, input.type, true);
     const cfg = this._normaliseDeviceConfig({ id: input.id, type: input.type, ...fields });
@@ -686,16 +729,30 @@ class Engine extends EventEmitter {
   }
 
   updateSettings(input) {
+    assert(input && typeof input === 'object' && !Array.isArray(input), '設定格式錯誤');
     const s = { ...this.config.settings };
-    for (const [k, v] of Object.entries(input || {})) {
-      assert(k in s, `未知的設定：${k}`);
-      s[k] = num(v, k, { min: 0, max: 100000 });
+    for (const [k, v] of Object.entries(input)) {
+      assert(own(s, k), `未知的設定：${k}`);
+      const range = own(SETTING_RANGES, k) ? SETTING_RANGES[k] : { label: k, min: 0, max: 100000 };
+      s[k] = num(v, range.label, range);
     }
     assert(s.lowRangeClearKm > s.lowRangeKm, '解除里程必須大於警示里程');
+    assert(s.criticalRangeKm <= s.lowRangeKm, '極低里程門檻不可大於低里程門檻');
     assert(s.defrostOffC > s.defrostOnC, '除霧關閉溫度必須高於開啟溫度');
+    // Only values that actually change are applied to the running state, so saving the configuration
+    // page (which always sends every field) does not undo a capacity the TA set from the console.
+    const changed = Object.keys(s).filter((k) => s[k] !== this.config.settings[k]);
     Object.assign(this.config.settings, s);
-    Object.assign(this.state.settings, s);
-    this._log('config', '更新系統設定');
+    for (const k of changed) this.state.settings[k] = s[k];
+    // Re-apply the hysteresis rules to the new thresholds.
+    const st = this.state.settings;
+    const env = this.state.environment;
+    if (env.rangeKm <= st.lowRangeKm) this.state.lowRange.active = true;
+    else if (env.rangeKm > st.lowRangeClearKm) this.state.lowRange.active = false;
+    if (env.ambientTempC <= st.defrostOnC) this.state.climate.defrostActive = true;
+    else if (env.ambientTempC > st.defrostOffC) this.state.climate.defrostActive = false;
+    const label = (k) => (own(SETTING_RANGES, k) ? SETTING_RANGES[k].label : k);
+    this._log('config', changed.length ? `更新系統設定：${changed.map((k) => `${label(k)} ${s[k]}`).join('、')}` : '更新系統設定（沒有變更）');
     this.evaluate();
   }
 

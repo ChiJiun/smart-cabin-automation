@@ -26,11 +26,16 @@ let interacting = false;
 // region is rewritten only when its HTML changed, never while a pointer or an activation key is
 // held inside it (the latest state is rendered right after release), and a focused control is
 // focused again afterwards.
-const HOLD_REGIONS = ['#cockpitBody', '#zones', '#powerBody', '#log'];
+const HOLD_REGIONS = ['#ckAlerts', '#ckIncident', '#ckCards', '#ckNav', '#zones', '#powerBody', '#log'];
 const lastHtml = new WeakMap();
 const holds = new Set();
 let deferred = false;
 let releaseTimer = null;
+let restoringFocus = false; // focus() called by setHtml, not by the user
+// TA console inputs the user has edited but not sent yet: re-rendering must not overwrite them
+// (e.g. the generator capacity loses focus when the "設定" button is pressed).
+const dirtyInputs = new Set();
+let forceConsoleSync = false;
 
 function setHtml(el, html) {
   for (const r of holds) {
@@ -45,7 +50,11 @@ function setHtml(el, html) {
   el.innerHTML = html;
   if (key) {
     const again = el.querySelector(key);
-    if (again) again.focus({ preventScroll: true });
+    if (again) {
+      restoringFocus = true;
+      again.focus({ preventScroll: true });
+      restoringFocus = false;
+    }
   }
 }
 
@@ -94,15 +103,33 @@ function forceRender() {
     const el = $(sel);
     if (el) lastHtml.delete(el);
   }
-  if (state) render(state);
+  dirtyInputs.clear();
+  interacting = false;
+  forceConsoleSync = true; // also put the TA console inputs back to the accepted values
+  try {
+    if (state) render(state);
+  } finally {
+    forceConsoleSync = false;
+  }
+}
+
+// Reads a TA console number field; an empty or invalid field is reported instead of sent as 0.
+function readNum(sel, label) {
+  const el = $(sel);
+  const n = Number(el.value);
+  if (el.value.trim() === '' || !Number.isFinite(n)) {
+    toast(`請輸入有效的${label}`);
+    return null;
+  }
+  return n;
 }
 
 // ------------------------------------------------------------------ API
 async function act(action) {
   try {
     const res = await fetch('/api/actions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action) });
-    const body = await res.json();
-    if (!res.ok) throw new Error(body.error || res.statusText);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `${res.status} ${res.statusText}`);
     render(body);
   } catch (err) {
     toast(err.message);
@@ -164,8 +191,11 @@ function audioCardText(audio) {
   return audio.on ? '音量 ' + audio.level : '關閉';
 }
 
+// With several devices of one role (a spare added on the configuration page) the card shows a
+// working one, as the engine keeps the function running while any of them is healthy.
 function deviceOfType(s, type, pred = () => true) {
-  return s.devices.find((d) => d.type === type && pred(d));
+  const all = s.devices.filter((d) => d.type === type && pred(d));
+  return all.find((d) => !d.fault) || all[0];
 }
 
 function ecallSummary(s) {
@@ -304,7 +334,9 @@ function navigationHtml(s, rangeUnknown) {
 let ecallRenderedKey = null;
 let ecallMinimisedKey = null;
 
-function ecallKey(inc) { return `${inc.startedAt}|${inc.ecallState}`; }
+// The engine numbers every incident: a scenario resets the clock, so startedAt is not unique.
+function ecallKey(inc) { return `${inc.id}|${inc.ecallState}`; }
+let ecallFocusedId = null;
 
 function renderEcallWindow(s) {
   const w = $('#ecallWindow');
@@ -323,6 +355,12 @@ function renderEcallWindow(s) {
   if (ecallRenderedKey !== key) {
     w.innerHTML = ecallWindowHtml(s);
     ecallRenderedKey = key;
+    // A new incident opens the window with the keyboard focus on its first choice (10 s to decide).
+    if (!w.hidden && ecallFocusedId !== inc.id) {
+      ecallFocusedId = inc.id;
+      const first = w.querySelector('.cw-actions button, .cw-cancel');
+      if (first) first.focus({ preventScroll: true });
+    }
   } else {
     updateEcallWindow(s); // keep focus on the buttons: only refresh the changing numbers
   }
@@ -402,6 +440,10 @@ function setEcallWindow(open) {
   if (!state || !state.incident.active) return;
   ecallMinimisedKey = open ? null : ecallKey(state.incident);
   renderEcallWindow(state);
+  // Keep the keyboard focus on something visible: the window's first button, or the cockpit's
+  // "open window" button after minimising.
+  const target = open ? $('#ecallWindow').querySelector('button:not([data-ecall-window])') : $('[data-ecall-window="open"]');
+  if (target) target.focus({ preventScroll: true });
 }
 
 // ------------------------------------------------------------------ power
@@ -420,7 +462,7 @@ function renderPower(s) {
     return html;
   }).join('');
   const affected = s.devices.filter((d) => d.powerState !== 'NORMAL');
-  const over = p.requestedPct !== null && p.requestedPct > 100;
+  const over = p.requestedW > p.capacityW;
 
   setHtml($('#powerBody'), `
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">
@@ -495,7 +537,7 @@ function renderConsole(s) {
     consoleInit = true;
   }
   const sel = $('#faultDevice');
-  const ids = s.devices.map((d) => d.id).join(',');
+  const ids = s.devices.map((d) => `${d.id}:${d.name}`).join('|'); // a renamed device updates its option
   if (sel.dataset.ids !== ids) {
     const cur = sel.value;
     sel.innerHTML = s.devices.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join('');
@@ -521,11 +563,12 @@ function renderConsole(s) {
   $('#navNow').textContent = target ? `導航中：${target.name}` : '';
   const rs = s.settings;
   $('#rangeRule').textContent = `≤ ${rs.lowRangeKm} km 觸發低里程提示（≤ ${rs.criticalRangeKm} km 為紅色 CRITICAL_RANGE），里程回升至 > ${rs.lowRangeClearKm} km 才解除。`;
+  const sync = (el) => forceConsoleSync || (document.activeElement !== el && !dirtyInputs.has(el.id));
   const amb = $('#ambient');
-  if (document.activeElement !== amb) amb.value = s.environment.ambientTempC;
+  if (sync(amb)) amb.value = s.environment.ambientTempC;
   $('#ambientVal').textContent = `${amb.value} °C`;
   const cap = $('#capacityW');
-  if (document.activeElement !== cap) cap.value = s.settings.capacityW;
+  if (sync(cap)) cap.value = s.settings.capacityW;
 }
 
 function renderLog(s) {
@@ -533,8 +576,10 @@ function renderLog(s) {
   const items = s.log.filter((l) => !kind || l.kind === kind).slice().reverse();
   setHtml($('#log'), items.length
     ? items.map((l) => `<li><span class="t">${fmtTime(l.t)}</span><span class="k ${l.kind}">${l.kind}</span><span>${esc(l.message)}</span></li>`).join('')
-    : '<li class="empty-row">沒有符合的日誌</li>');
-  $('#logCount').textContent = `畫面顯示最近 ${s.log.length} 筆（共 ${s.logTotal} 筆）；匯出可取得完整日誌以比對重現結果。`;
+    : `<li class="empty-row">${kind ? `最近 ${s.log.length} 筆中沒有此類別；匯出可查看完整日誌` : '沒有符合的日誌'}</li>`);
+  $('#logCount').textContent = kind
+    ? `最近 ${s.log.length} 筆中有 ${items.length} 筆「${kind}」（共 ${s.logTotal} 筆）；匯出可取得完整日誌。`
+    : `畫面顯示最近 ${s.log.length} 筆（共 ${s.logTotal} 筆）；匯出可取得完整日誌以比對重現結果。`;
 }
 
 // ------------------------------------------------------------------ sound (audible alerts)
@@ -609,10 +654,14 @@ document.addEventListener('click', (e) => {
   if (b.dataset.range) { $('#rangeKm').value = b.dataset.range; return act({ type: 'setRange', km: Number(b.dataset.range) }); }
   if (b.dataset.dev && b.dataset.op === 'toggle') {
     const d = state.devices.find((x) => x.id === b.dataset.dev);
+    if (!d) { toast('此設備已不存在'); return forceRender(); } // removed while the button was held
     return act({ type: 'setDevice', id: d.id, on: !d.on });
   }
   switch (b.dataset.act) {
-    case 'impact': return act({ type: 'impact', g: Number($('#impactG').value), direction: b.dataset.dir || 'front' });
+    case 'impact': {
+      const g = readNum('#impactG', '衝擊值');
+      return g === null ? undefined : act({ type: 'impact', g, direction: b.dataset.dir || 'front' });
+    }
     case 'selectEcall': return act({ type: 'selectEcall', service: b.dataset.service });
     case 'cancelEcall': return act({ type: 'cancelEcall' });
     case 'clearIncident': return act({ type: 'clearIncident' });
@@ -620,9 +669,15 @@ document.addEventListener('click', (e) => {
     case 'sirenOff': return act({ type: 'siren', active: false });
     case 'bs': return act({ type: 'blindSpot', side: b.dataset.side, detected: !state.sensors.blindSpot[b.dataset.side] });
     case 'ts': return act({ type: 'turnSignal', value: b.dataset.val });
-    case 'setRange': return act({ type: 'setRange', km: Number($('#rangeKm').value) });
+    case 'setRange': {
+      const km = readNum('#rangeKm', '剩餘里程');
+      return km === null ? undefined : act({ type: 'setRange', km });
+    }
     case 'cancelNav': return act({ type: 'cancelNavigation' });
-    case 'setCapacity': return act({ type: 'setCapacity', watts: Number($('#capacityW').value) });
+    case 'setCapacity': {
+      const watts = readNum('#capacityW', '發電機容量');
+      return watts === null ? undefined : act({ type: 'setCapacity', watts }).finally(() => dirtyInputs.delete('capacityW'));
+    }
     case 'altFault': return act({ type: 'setAlternatorFault', fault: !state.power.alternatorFault });
     case 'fault': return act({ type: 'setFault', id: $('#faultDevice').value, fault: b.dataset.val === '1' });
     case 'reset': return act({ type: 'reset' });
@@ -639,27 +694,43 @@ document.addEventListener('keydown', (e) => {
 
 document.addEventListener('change', (e) => {
   const el = e.target;
-  if (el.id === 'ambient') return act({ type: 'setAmbient', celsius: Number(el.value) });
+  if (el.id === 'ambient') return act({ type: 'setAmbient', celsius: Number(el.value) }).finally(() => dirtyInputs.delete('ambient'));
   if (el.id === 'logKind') return state && renderLog(state);
   if (!el.dataset.dev) return undefined;
   interacting = false;
   const id = el.dataset.dev;
   if (el.dataset.op === 'level') return act({ type: 'setDevice', id, level: Number(el.value) });
-  if (el.dataset.op === 'load') return act({ type: 'setDevice', id, load: Number(el.value) });
+  if (el.dataset.op === 'load') {
+    if (el.value.trim() === '') { toast('請輸入負載瓦數'); return forceRender(); }
+    return act({ type: 'setDevice', id, load: Number(el.value) });
+  }
   if (el.dataset.op === 'auto') return act({ type: 'setDevice', id, auto: el.checked });
   return undefined;
 });
 
 document.addEventListener('input', (e) => {
   if (e.target.id === 'ambient') $('#ambientVal').textContent = `${e.target.value} °C`;
+  if (e.target.id === 'ambient' || e.target.id === 'capacityW') dirtyInputs.add(e.target.id);
 });
 
 // Don't re-render the device list while the user is dragging a slider or typing.
 const zonesEl = $('#zones');
+// Focus given back by setHtml after a rebuild is not the user starting to type again.
 zonesEl.addEventListener('pointerdown', (e) => { if (e.target.matches('input')) interacting = true; });
-zonesEl.addEventListener('focusin', (e) => { if (e.target.matches('input[type=number]')) interacting = true; });
-zonesEl.addEventListener('focusout', () => { interacting = false; if (state) renderZones(state); });
-document.addEventListener('pointerup', () => { setTimeout(() => { if (interacting && !zonesEl.contains(document.activeElement)) { interacting = false; } }, 0); });
+zonesEl.addEventListener('focusin', (e) => { if (!restoringFocus && e.target.matches('input[type=number]')) interacting = true; });
+zonesEl.addEventListener('input', (e) => { if (e.target.matches('input[type=number]')) interacting = true; });
+zonesEl.addEventListener('focusout', () => { if (restoringFocus) return; interacting = false; if (state) renderZones(state); });
+// A slider that was only clicked (no change event) must not keep the list frozen.
+document.addEventListener('pointerup', () => {
+  setTimeout(() => {
+    const a = document.activeElement;
+    const typing = zonesEl.contains(a) && a.matches('input[type=number]');
+    if (interacting && !typing) {
+      interacting = false;
+      if (state) renderZones(state);
+    }
+  }, 0);
+});
 
 fetch('/api/state').then((r) => r.json()).then(render).catch((err) => toast(err.message));
 connect();

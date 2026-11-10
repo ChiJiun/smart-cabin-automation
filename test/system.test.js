@@ -178,3 +178,73 @@ test('HTTP API: the full log can be exported as JSON and CSV', async () => {
     server.close();
   }
 });
+
+test('every incident gets a new id, also when a scenario reset the clock in between', () => {
+  const { e, s } = setup();
+  e.dispatch({ type: 'scenario', name: 'collision-rear' });
+  const first = s().incident;
+  assert.equal(first.active, true);
+  e.dispatch({ type: 'reset' });
+  e.dispatch({ type: 'impact', g: 6, direction: 'front' });
+  const second = s().incident;
+  assert.equal(second.startedAt, first.startedAt); // the clock was reset: startedAt alone is ambiguous
+  assert.notEqual(second.id, first.id);
+});
+
+test('a rejected setDevice request changes nothing; booleans and integers are checked strictly', () => {
+  const { act, dev } = setup();
+  const before = { ...dev('seat-driver') };
+  assert.throws(() => act('setDevice', { id: 'seat-driver', on: true, level: 99 }), /檔位/);
+  assert.equal(dev('seat-driver').on, before.on);
+  assert.equal(dev('seat-driver').level, before.level);
+  assert.throws(() => act('setDevice', { id: 'seat-driver', on: 'false' }), /true 或 false/);
+  assert.throws(() => act('setDevice', { id: 'seat-driver', level: 1.5 }), /整數/);
+  assert.throws(() => act('setDevice', { id: 'seat-driver' }), /沒有要變更/);
+  assert.throws(() => act('setFault', { id: 'seat-driver', fault: 1 }), /true 或 false/);
+  assert.throws(() => act('setRange', { km: '' }), /必須是數字/);
+  assert.throws(() => act('setRange', { km: true }), /必須是數字/);
+});
+
+test('names inherited from Object.prototype are not accepted as actions, scenarios, settings, types or ids', () => {
+  const { e, act } = setup();
+  assert.throws(() => act('constructor'), /未知的操作/);
+  assert.throws(() => act('scenario', { name: 'toString' }), /未知的情境/);
+  assert.throws(() => act('siren', { active: true, direction: 'constructor' }), /方位/);
+  assert.throws(() => e.updateSettings({ constructor: 1 }), /未知的設定/);
+  assert.throws(() => e.addDevice({ id: 'x1', type: 'constructor', name: 'x', zone: 'front' }), /設備類型無效/);
+  assert.throws(() => e.addDevice({ id: '__proto__', type: 'fridge', name: 'x', zone: 'rear_cabin' }), /保留字/);
+  assert.throws(() => e.addZone({ id: 'constructor', name: 'x' }), /保留字/);
+});
+
+test('settings: only changed values reach the running state; thresholds are re-applied and cross-checked', () => {
+  const { e, act, s } = setup();
+  act('setCapacity', { watts: 400 });
+  e.updateSettings({ ...e.getConfig().settings, ecallCountdownS: 15 }); // the configuration page sends every field
+  assert.equal(s().settings.capacityW, 400);
+  assert.equal(s().settings.ecallCountdownS, 15);
+  assert.match(s().log.at(-1).message, /eCall 倒數秒數 15/);
+  act('setRange', { km: 40 });
+  assert.equal(s().lowRange.active, false);
+  e.updateSettings({ lowRangeKm: 50, lowRangeClearKm: 55 });
+  assert.equal(s().lowRange.active, true);
+  assert.ok(s().alerts.some((a) => a.id === 'low-range'));
+  assert.throws(() => e.updateSettings({ criticalRangeKm: 60 }), /極低里程門檻/);
+  assert.throws(() => e.updateSettings({ reachableFactor: 1.5 }), /可抵達係數/);
+  e.updateSettings({ defrostOnC: -5, defrostOffC: -2 }); // temperatures may be negative
+  assert.equal(s().settings.defrostOnC, -5);
+});
+
+test('HTTP API: malformed JSON is answered with a JSON error', async () => {
+  const engine = new Engine();
+  engine.state.clockRunning = false;
+  const server = http.createServer(createApp(engine)).listen(0);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const r = await fetch(`${base}/api/actions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{bad' });
+    assert.equal(r.status, 400);
+    assert.match(r.headers.get('content-type'), /application\/json/);
+    assert.match((await r.json()).error, /JSON/);
+  } finally {
+    server.close();
+  }
+});

@@ -41,9 +41,8 @@ const DEVICE_TYPES = {
 const SAFETY_TYPES = Object.keys(DEVICE_TYPES).filter((t) => DEVICE_TYPES[t].fixedPriority === 0);
 
 function getType(type) {
-  const t = DEVICE_TYPES[type];
-  if (!t) throw new Error(`Unknown device type: ${type}`);
-  return t;
+  if (!Object.prototype.hasOwnProperty.call(DEVICE_TYPES, type)) throw new Error(`Unknown device type: ${type}`);
+  return DEVICE_TYPES[type];
 }
 
 /**

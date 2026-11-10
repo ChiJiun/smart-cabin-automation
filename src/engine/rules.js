@@ -248,14 +248,22 @@ function computeAlerts(state, power) {
   for (const d of state.devices) {
     if (!d.fault || (d.type === 'ecu' && !ecuAvailable(state))) continue; // range-unknown already covers it
     const side = SIDE_LABEL[d.props.side] || '';
+    const sameSide = (x) => x.props.side === d.props.side;
+    // With a working spare of the same role (configured on the configuration page) the function
+    // keeps running, so only the faulted unit is reported.
+    const spare = { title: `${d.name} 故障`, message: '同類備援設備仍在運作' };
+    let a;
     if (d.type === 'bsd_radar') {
-      alerts.push({ id: `fault-${d.id}`, priority: 6, level: 'info', title: `${side}盲區輔助失效`, message: `${d.name} 故障，無法偵測盲區來車` });
+      a = healthy(state, 'bsd_radar', sameSide) ? spare : { title: `${side}盲區輔助失效`, message: `${d.name} 故障，無法偵測盲區來車` };
     } else if (d.type === 'mirror') {
-      alerts.push({ id: `fault-${d.id}`, priority: 6, level: 'info', title: `${side}後視鏡 LED 故障`, message: '盲區警示改由儀表與蜂鳴器提示' });
+      a = { title: `${side}後視鏡 LED 故障`, message: healthy(state, 'bsd_radar', sameSide) ? '盲區警示改由儀表與蜂鳴器提示' : `${d.name} 故障` };
     } else if (d.type === 'audio_sensor') {
-      alerts.push({ id: `fault-${d.id}`, priority: 6, level: 'info', title: '救護車笛聲偵測失效', message: `${d.name} 故障` });
+      a = healthy(state, 'audio_sensor') ? spare : { title: '救護車笛聲偵測失效', message: `${d.name} 故障` };
     } else if (d.type === 'buzzer') {
-      alerts.push({ id: `fault-${d.id}`, priority: 6, level: 'info', title: '中控蜂鳴器故障', message: '警示音無法發出，請留意儀表警示' });
+      a = healthy(state, 'buzzer') ? spare : { title: `${d.name}故障`, message: '警示音無法發出，請留意儀表警示' };
+    }
+    if (a) {
+      alerts.push({ id: `fault-${d.id}`, priority: 6, level: 'info', ...a });
     } else if (d.type === 'ecall' && incident.active && incident.ecallState === 'FAULT') {
       // the collision alert already tells the driver to dial manually
     } else {

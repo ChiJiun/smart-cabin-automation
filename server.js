@@ -6,6 +6,7 @@ const { Engine } = require('./src/engine/Engine');
 
 function createApp(engine = new Engine()) {
   const app = express();
+  engine.setMaxListeners(0); // one 'change' listener per open dashboard (SSE)
   app.use(express.json());
   app.use(express.static(path.join(__dirname, 'public')));
 
@@ -58,6 +59,17 @@ function createApp(engine = new Engine()) {
   app.put('/api/devices/:id', wrap((req) => { engine.updateDevice(req.params.id, req.body); return engine.getConfig(); }));
   app.delete('/api/devices/:id', wrap((req) => { engine.deleteDevice(req.params.id); return engine.getConfig(); }));
   app.put('/api/settings', wrap((req) => { engine.updateSettings(req.body); return engine.getConfig(); }));
+
+  // Body-parser errors (malformed JSON, oversized body) are answered as JSON like every other error,
+  // instead of Express's default HTML page.
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, req, res, next) => {
+    const status = err.status || err.statusCode || 500;
+    let error = '伺服器錯誤';
+    if (err.type === 'entity.too.large') error = '請求內容過大';
+    else if (status < 500) error = '請求格式錯誤（內容必須是 JSON）';
+    res.status(status).json({ error });
+  });
 
   return app;
 }

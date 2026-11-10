@@ -90,10 +90,10 @@
 |---|---|---|---|
 | 總功率需求超過發電機容量（負載率 > 100%） | `powerManager.js`：`allocatePower`（`requestedPct`） | b5：winter overload scenario…（129.6%） | 「設備需求（管理前）1296 W・129.6%」 |
 | (1) 關閉 P3 逆變器插座與音響 | `powerManager.js`：P3 整台關閉，同等級依 `shedOrder` | b5：winter overload scenario… | 載入「寒流夜間長途」 |
-| (2) 依序調降 P2 座椅加熱（後座→副駕→駕駛，每次降 1 檔至 0 檔） | `powerManager.js`：可調設備逐檔降載 | b5：P1/P2 seat heaters are reduced one level at a time…、alternator fault… | 載入「寒流＋發電機故障」 |
+| (2) 依序調降 P2 座椅加熱（後座→副駕→駕駛，每次降 1 檔至 0 檔） | `powerManager.js`：可調設備逐檔降載 | b5：P1/P2 seat heaters are reduced one level at a time…、alternator fault… | 載入「寒流＋發電機故障」看最終結果；逐步調整「發電機容量」看順序（TA_GUIDE 行為 5 第 6 步） |
 | (3) P1 空調每次調降 1 檔（最低保留 1 檔，除霧不關閉） | `powerManager.js`：P1 可調設備最低 1 檔，P1 非可調設備不卸載 | b5：alternator fault (400 W)… | 空調降為 2 檔、除霧維持 |
 | (4) P0 永不卸載 | `powerManager.js`：候選只含 P1 以上 | b5：CRITICAL_POWER when P0 + P1 minimum exceeds capacity | 載入「電力危急」 |
-| 容量回升依反向順序自動恢復或解除 DEFERRED | 每次重新由需求狀態分配電力 | b5：restoring capacity restores devices in reverse order、a device turned on without headroom is DEFERRED… | 按「發電機故障中（點擊恢復）」 |
+| 容量回升依反向順序自動恢復或解除 DEFERRED | 每次重新由需求狀態分配電力 | b5：restoring capacity restores devices in reverse order、a device turned on without headroom is DEFERRED… | 按「發電機故障中（點擊恢復）」；逐步調回「發電機容量」看反向順序（TA_GUIDE 行為 5 第 6 步） |
 
 P3 內部順序：提案第 (1) 步點名「逆變器插座與音響」。內建配置另有車用冰箱與兩台後座螢幕，目前 P3 卸載順序為冰箱、逆變器、左螢幕、右螢幕、音響。只需要卸載部分 P3 時，會先關冰箱。這一點列為待使用者決定的事項。
 

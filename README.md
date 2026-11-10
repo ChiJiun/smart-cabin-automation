@@ -46,7 +46,7 @@ docs/REQUIREMENTS_TRACE.md 提案逐條對照：實作位置、測試、畫面�
 
 | 行為 | 觸發 | 連鎖反應 |
 |---|---|---|
-| 1 前／後撞擊 | `impact { g, direction: front \| rear }`，g ≥ 4.0 且該側至少一顆碰撞傳感器正常（無傳感器或全部故障則不偵測） | 系統等級升為 `CRITICAL_EMERGENCY`（頁首顯示並寫入日誌）；儀表紅色警告並標記碰撞方位；全部記錄器 EMERGENCY_LOCK，受撞擊側記錄器優先 UPLOADING（10 秒）；eCall 通話視窗 10 秒倒數，可選擇撥打 119 或 110（`selectEcall`）或取消誤觸；倒數結束未選擇則撥 119 並通報 110；CONNECTED 時傳送 GPS 與撞擊方向；P2／P3 與音響強制關閉 |
+| 1 前／後撞擊 | `impact { g, direction: front \| rear }`，g ≥ 4.0 且該側至少一顆碰撞傳感器正常（無傳感器或全部故障則不偵測） | 系統等級升為 `CRITICAL_EMERGENCY`（頁首顯示並寫入日誌）；儀表紅色警告並標記碰撞方位；受撞擊側記錄器優先 UPLOADING（10 秒），其餘記錄器 EMERGENCY_LOCK；eCall 通話視窗 10 秒倒數，可選擇撥打 119 或 110（`selectEcall`）或取消誤觸；倒數結束未選擇則撥 119 並通報 110；CONNECTED 時傳送 GPS 與撞擊方向；P2／P3 與音響強制關閉 |
 | 2 救護車 | `siren { active, direction }`，且音訊傳感器正常（故障或未配置則不偵測） | 音響 MUTED（保留原音量）、儀表顯示「[方位] 有救護車，請注意避讓」、笛聲結束自動恢復 |
 | 3 盲區 | 盲區雷達 `DETECTED` ＋ 同側方向燈 `ACTIVE` | 該側後視鏡 LED FLASHING、中控蜂鳴器持續警示音；僅有車未打燈 → LED 恆亮、不鳴響；關燈或車輛離開立即解除 |
 | 4 低里程 | 行車電腦回報里程 ≤ 30 km（≤ 10 km 為紅色 CRITICAL_RANGE；回升至 > 35 km 才解除） | 以里程 × 0.9 篩選可抵達加油站，依距離排序顯示站名、距離、預估抵達消耗；可設定或取消導航；目標超出範圍時自動取消 |
