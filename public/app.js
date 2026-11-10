@@ -19,6 +19,84 @@ const SIDE_SHORT = { left: '左', right: '右' };
 let state = null;
 let interacting = false;
 
+// ------------------------------------------------------------------ stable re-rendering
+// While the clock runs, SSE pushes a new state every simulated second. Rewriting a region's
+// innerHTML under the user's hand swallows clicks (the pressed button is replaced between
+// mousedown and mouseup, so the browser never fires click) and drops the keyboard focus. So a
+// region is rewritten only when its HTML changed, never while a pointer or an activation key is
+// held inside it (the latest state is rendered right after release), and a focused control is
+// focused again afterwards.
+const HOLD_REGIONS = ['#cockpitBody', '#zones', '#powerBody', '#log'];
+const lastHtml = new WeakMap();
+const holds = new Set();
+let deferred = false;
+let releaseTimer = null;
+
+function setHtml(el, html) {
+  for (const r of holds) {
+    if (r.contains(el)) {
+      deferred = true;
+      return;
+    }
+  }
+  if (lastHtml.get(el) === html) return;
+  const key = focusKey(el);
+  lastHtml.set(el, html);
+  el.innerHTML = html;
+  if (key) {
+    const again = el.querySelector(key);
+    if (again) again.focus({ preventScroll: true });
+  }
+}
+
+// A selector (tag + data-* attributes) that finds the focused control again after a rebuild.
+function focusKey(el) {
+  const a = document.activeElement;
+  if (!a || a === el || !el.contains(a)) return null;
+  const attrs = [...a.attributes].filter((x) => x.name.startsWith('data-'));
+  if (!attrs.length) return null;
+  return a.tagName.toLowerCase() + attrs.map((x) => `[${x.name}="${CSS.escape(x.value)}"]`).join('');
+}
+
+function holdAt(target) {
+  clearTimeout(releaseTimer);
+  for (const sel of HOLD_REGIONS) {
+    const r = $(sel);
+    if (r && r.contains(target)) holds.add(r);
+  }
+}
+
+function releaseHolds(delayMs) {
+  clearTimeout(releaseTimer);
+  releaseTimer = setTimeout(() => {
+    holds.clear();
+    if (deferred && state) {
+      deferred = false;
+      render(state);
+    }
+  }, delayMs);
+}
+
+const isActivationKey = (e) => e.key === 'Enter' || e.key === ' ';
+document.addEventListener('pointerdown', (e) => holdAt(e.target), true);
+// A mouse click follows pointerup in the same task; a touch tap may deliver it a little later.
+document.addEventListener('pointerup', () => releaseHolds(400), true);
+document.addEventListener('pointercancel', () => releaseHolds(0), true);
+document.addEventListener('click', () => releaseHolds(0), true); // fires after this click is handled
+document.addEventListener('keydown', (e) => { if (isActivationKey(e)) holdAt(e.target); }, true);
+document.addEventListener('keyup', (e) => { if (isActivationKey(e)) releaseHolds(0); }, true);
+window.addEventListener('blur', () => releaseHolds(0));
+
+// After a rejected action the controls may show a value the server never accepted (a typed load,
+// a toggled checkbox) while the HTML string is unchanged, so drop the cache and redraw from state.
+function forceRender() {
+  for (const sel of ['#ckAlerts', '#ckIncident', '#ckCards', '#ckNav', '#zones', '#powerBody', '#log']) {
+    const el = $(sel);
+    if (el) lastHtml.delete(el);
+  }
+  if (state) render(state);
+}
+
 // ------------------------------------------------------------------ API
 async function act(action) {
   try {
@@ -28,6 +106,7 @@ async function act(action) {
     render(body);
   } catch (err) {
     toast(err.message);
+    forceRender();
   }
 }
 
@@ -102,7 +181,25 @@ function ecallSummary(s) {
   }
 }
 
+function hvacCardText(hvac) {
+  if (!hvac) return '—';
+  if (hvac.fault) return '故障';
+  if (hvac.status === 'SHED' || hvac.status === 'DEFERRED') return STATUS_LABEL[hvac.status];
+  if (!hvac.on) return '關閉';
+  const mode = { HEATING: '暖氣', COOLING: '冷氣' }[hvac.mode] || '送風';
+  return `${mode} ${hvac.effectiveLevel} 檔${hvac.powerState === 'REDUCED' ? '（降載）' : ''}`;
+}
+
+// The cockpit is split into regions so a ticking countdown does not rebuild the station table.
 function renderCockpit(s) {
+  const rangeUnknown = !s.devices.some((d) => d.type === 'ecu' && !d.fault); // ECU faulted or not configured
+  setHtml($('#ckAlerts'), alertsHtml(s));
+  setHtml($('#ckIncident'), incidentHtml(s));
+  setHtml($('#ckCards'), cardsHtml(s, rangeUnknown));
+  setHtml($('#ckNav'), navigationHtml(s, rangeUnknown));
+}
+
+function alertsHtml(s) {
   const main = s.mainAlert;
   const flash = main && main.level === 'critical';
   let html = main
@@ -113,8 +210,12 @@ function renderCockpit(s) {
   if (rest.length) {
     html += '<ul class="secondary">' + rest.map((a) => `<li><span class="badge ${a.level}">${a.level === 'critical' ? '緊急' : a.level === 'warning' ? '警示' : '提示'}</span><span><b>${esc(a.title)}</b>${a.message ? ' — ' + esc(a.message) : ''}</span></li>`).join('') + '</ul>';
   }
+  return html;
+}
 
+function incidentHtml(s) {
   const inc = s.incident;
+  let html = '';
   if (inc.active) {
     const upDev = inc.uploadSource ? s.devices.find((d) => d.id === inc.uploadSource) : null;
     const upName = upDev ? upDev.name : null;
@@ -128,24 +229,24 @@ function renderCockpit(s) {
         ${$('#ecallWindow').hidden ? '<button class="btn sm" data-ecall-window="open">開啟通話視窗</button>' : ''}</div>
     </div>`;
   }
+  return html;
+}
 
+function cardsHtml(s, rangeUnknown) {
   const hvac = deviceOfType(s, 'hvac');
   const audio = deviceOfType(s, 'audio');
   const buzzer = deviceOfType(s, 'buzzer');
   const mic = deviceOfType(s, 'audio_sensor');
-  const ecuFault = s.devices.some((d) => d.type === 'ecu' && d.fault);
-  html += `<div class="cards">
+  const hvacMode = hvac && hvac.hasAuto && hvac.on && !hvac.fault ? (hvac.auto ? '（自動）' : '（手動）') : '';
+  return `<div class="cards">
     <div class="mini"><div class="k">車外溫度</div><div class="v">${s.environment.ambientTempC} °C</div></div>
-    <div class="mini"><div class="k">空調</div><div class="v">${hvac ? (hvac.powerState === 'NORMAL' || hvac.powerState === 'REDUCED' ? `${hvac.mode === 'HEATING' ? '暖氣' : hvac.mode === 'COOLING' ? '冷氣' : hvac.mode === 'OFF' ? '關閉' : hvac.mode === 'FAULT' ? '故障' : '送風'} ${hvac.on && !hvac.fault ? hvac.effectiveLevel + ' 檔' : ''}` : STATUS_LABEL[hvac.status]) : '—'}</div></div>
-    <div class="mini"><div class="k">剩餘里程</div><div class="v">${ecuFault ? '— —' : s.environment.rangeKm + ' km'}</div></div>
+    <div class="mini"><div class="k">空調${hvacMode}</div><div class="v">${hvacCardText(hvac)}</div></div>
+    <div class="mini"><div class="k">剩餘里程</div><div class="v">${rangeUnknown ? '— —' : s.environment.rangeKm + ' km'}</div></div>
     <div class="mini"><div class="k">音響</div><div class="v">${audioCardText(audio)}</div></div>
     <div class="mini"><div class="k">中控蜂鳴器</div><div class="v">${!buzzer ? '—' : buzzer.fault ? '故障' : s.buzzer ? '🔊 持續警示音' : '靜止'}</div></div>
     <div class="mini"><div class="k">音訊傳感器</div><div class="v">${!mic ? '未配置' : mic.fault ? '故障' : mic.mode === 'SIREN_DETECTED' ? `笛聲：${DIRECTION_LABEL[s.sensors.siren.direction]}` : '監聽中'}</div></div>
     ${blindSpotCard(s)}
   </div>`;
-
-  html += navigationHtml(s, ecuFault);
-  $('#cockpitBody').innerHTML = html;
 }
 
 // Behavior 3: radar DETECTED + same-side turn signal ACTIVE -> mirror LED FLASHING + buzzer.
@@ -168,14 +269,16 @@ function blindSpotCard(s) {
 }
 
 // Behavior 4: reachable stations only (distance <= range x factor), sorted by distance.
-function navigationHtml(s, ecuFault) {
+function navigationHtml(s, rangeUnknown) {
   const nav = s.navigation;
+  const rs = s.settings;
   const target = nav.stations.find((x) => x.id === nav.targetId);
   let html = '';
-  if (s.lowRange.active && !ecuFault) {
+  if (s.lowRange.active && !rangeUnknown) {
     const reachable = nav.stations.filter((st) => st.reachable);
     const unreachable = nav.stations.filter((st) => !st.reachable);
-    html += `<h3>推薦加油站 <span class="sub" style="font-weight:400">可抵達範圍：${s.environment.rangeKm} km × ${s.settings.reachableFactor} = ${nav.reachableKm} km，依距離排序</span></h3>`;
+    html += `<h3>推薦加油站 <span class="sub" style="font-weight:400">可抵達範圍：${s.environment.rangeKm} km × ${rs.reachableFactor} = ${nav.reachableKm} km，依距離排序</span></h3>`;
+    html += `<p class="hint">≤ ${rs.lowRangeKm} km 觸發低里程提示（≤ ${rs.criticalRangeKm} km 為紅色 CRITICAL_RANGE），里程回升至 &gt; ${rs.lowRangeClearKm} km 才解除。</p>`;
     if (reachable.length) {
       html += '<div class="table-wrap"><table><thead><tr><th>站名</th><th>距離</th><th>預估抵達消耗</th><th>抵達後剩餘</th><th></th></tr></thead><tbody>';
       html += reachable.map((st) => `<tr class="${st.id === nav.targetId ? 'target' : ''}">
@@ -186,7 +289,8 @@ function navigationHtml(s, ecuFault) {
       html += '<p class="hint"><b>附近無可抵達加油站，建議聯絡道路救援。</b></p>';
     }
     if (unreachable.length) {
-      html += `<details class="unreach"><summary>超出可抵達範圍的加油站（${unreachable.length} 站，不列入推薦）</summary><ul>${unreachable.map((st) => `<li>${esc(st.name)}・${st.distanceKm} km</li>`).join('')}</ul></details>`;
+      const live = $('#ckNav details.unreach'); // keep it open across re-renders
+      html += `<details class="unreach"${live && live.open ? ' open' : ''}><summary data-key="unreach">超出可抵達範圍的加油站（${unreachable.length} 站，不列入推薦）</summary><ul>${unreachable.map((st) => `<li>${esc(st.name)}・${st.distanceKm} km</li>`).join('')}</ul></details>`;
     }
   } else if (target) {
     html += `<p class="hint nav-now">導航中：${esc(target.name)}（${target.distanceKm} km） <button class="btn sm" data-act="cancelNav">取消導航</button></p>`;
@@ -318,7 +422,7 @@ function renderPower(s) {
   const affected = s.devices.filter((d) => d.powerState !== 'NORMAL');
   const over = p.requestedPct !== null && p.requestedPct > 100;
 
-  $('#powerBody').innerHTML = `
+  setHtml($('#powerBody'), `
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">
       <div><span class="big">${p.demandW}</span> / ${p.capacityW} W　<span class="hint">實際負載率 ${pctText(p.loadPct)}</span></div>
       <span class="badge ${p.status}">${POWER_LABEL[p.status]}</span>
@@ -336,7 +440,7 @@ function renderPower(s) {
     </div>
     <h3>負載管理決策</h3>
     ${affected.length ? `<div class="table-wrap"><table><thead><tr><th>設備</th><th>等級</th><th>處置</th><th>原因</th></tr></thead><tbody>${affected.map((d) => `<tr><td>${esc(d.name)}</td><td><span class="prio p${d.priority}">P${d.priority}</span></td><td><span class="badge ${d.powerState}">${POWER_STATE_LABEL[d.powerState]}${d.powerState === 'REDUCED' ? ` ${d.level}→${d.effectiveLevel} 檔` : ''}</span></td><td>${REASON_LABEL[d.powerReason] || ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">無，所有設備依需求供電。</p>'}
-  `;
+  `);
 }
 
 // ------------------------------------------------------------------ zones
@@ -380,7 +484,7 @@ function renderZones(s) {
       </div>`).join('') : '<p class="empty">此區域尚無設備</p>'}
     </div>`;
   }).join('');
-  $('#zones').innerHTML = html;
+  setHtml($('#zones'), html);
 }
 
 // ------------------------------------------------------------------ console
@@ -415,6 +519,8 @@ function renderConsole(s) {
   const target = s.navigation.stations.find((x) => x.id === s.navigation.targetId);
   $('#btnCancelNav').disabled = !target;
   $('#navNow').textContent = target ? `導航中：${target.name}` : '';
+  const rs = s.settings;
+  $('#rangeRule').textContent = `≤ ${rs.lowRangeKm} km 觸發低里程提示（≤ ${rs.criticalRangeKm} km 為紅色 CRITICAL_RANGE），里程回升至 > ${rs.lowRangeClearKm} km 才解除。`;
   const amb = $('#ambient');
   if (document.activeElement !== amb) amb.value = s.environment.ambientTempC;
   $('#ambientVal').textContent = `${amb.value} °C`;
@@ -425,9 +531,9 @@ function renderConsole(s) {
 function renderLog(s) {
   const kind = $('#logKind').value;
   const items = s.log.filter((l) => !kind || l.kind === kind).slice().reverse();
-  $('#log').innerHTML = items.length
+  setHtml($('#log'), items.length
     ? items.map((l) => `<li><span class="t">${fmtTime(l.t)}</span><span class="k ${l.kind}">${l.kind}</span><span>${esc(l.message)}</span></li>`).join('')
-    : '<li class="empty-row">沒有符合的日誌</li>';
+    : '<li class="empty-row">沒有符合的日誌</li>');
   $('#logCount').textContent = `畫面顯示最近 ${s.log.length} 筆（共 ${s.logTotal} 筆）；匯出可取得完整日誌以比對重現結果。`;
 }
 

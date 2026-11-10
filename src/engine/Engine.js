@@ -197,10 +197,13 @@ class Engine extends EventEmitter {
       }
     }
     if (prev.powerStatus !== now.powerStatus) this._log('power', `電力狀態：${prev.powerStatus} → ${now.powerStatus}`);
-    const added = now.alerts.filter((a) => !prev.alerts.includes(a));
-    const removedIds = prev.alerts.map((a) => a.split('|')[0]).filter((id) => !now.alerts.some((a) => a.startsWith(id + '|')));
-    for (const a of added) this._log('alert', `警示：${a.split('|')[1]}`);
-    for (const id of removedIds) this._log('alert', `警示解除：${id}`);
+    // Alerts are snapshotted as "id|title" (ids never contain "|"; titles may, as device names are
+    // user-editable). A cleared alert is logged with the title the driver saw, not its internal id.
+    const idOf = (a) => a.slice(0, a.indexOf('|'));
+    const titleOf = (a) => a.slice(a.indexOf('|') + 1);
+    const nowIds = new Set(now.alerts.map(idOf));
+    for (const a of now.alerts.filter((x) => !prev.alerts.includes(x))) this._log('alert', `警示：${titleOf(a)}`);
+    for (const a of prev.alerts.filter((x) => !nowIds.has(idOf(x)))) this._log('alert', `警示解除：${titleOf(a)}`);
   }
 
   _log(kind, message) {
@@ -274,15 +277,14 @@ class Engine extends EventEmitter {
 
   /**
    * Behavior 4: a navigation target that is no longer reachable with the remaining range is dropped
-   * (the driver is shown the stations that are still reachable). While the ECU is faulted the range
-   * is unknown, so the chosen target is kept.
+   * (the driver is shown the stations that are still reachable). While no working ECU reports the
+   * range (faulted or not configured) the range is unknown, so the chosen target is kept.
    */
   _reconcileNavigation() {
     const s = this.state;
     const id = s.navigation.targetId;
     if (!id) return;
-    const ecu = s.devices.find((d) => d.type === 'ecu');
-    if (!ecu || ecu.fault) return;
+    if (!rules.ecuAvailable(s)) return;
     const st = s.navigationView.stations.find((x) => x.id === id);
     if (st && st.reachable) return;
     s.navigation.targetId = null;
@@ -455,12 +457,17 @@ class Engine extends EventEmitter {
         this.state.environment.rangeKm = km;
         if (km <= st.lowRangeKm) this.state.lowRange.active = true;
         else if (km > st.lowRangeClearKm) this.state.lowRange.active = false;
-        this._log('event', `行車電腦回報剩餘里程 ${km} km`);
+        // The range is part of the vehicle state; the system only learns it through a working ECU
+        // (one repaired or added later picks up the current range on the next evaluation).
+        const ecus = this.state.devices.filter((d) => d.type === 'ecu');
+        if (ecus.some((d) => !d.fault)) this._log('event', `行車電腦回報剩餘里程 ${km} km`);
+        else this._log('event', `剩餘里程變為 ${km} km，但${ecus.length ? '行車電腦故障' : '未配置行車電腦'}，系統無法取得里程`);
       },
       navigate(a) {
         const view = rules.computeNavigation(this.state, STATIONS, haversineKm);
         const st = view.stations.find((x) => x.id === a.stationId);
         assert(st, '找不到加油站');
+        assert(rules.ecuAvailable(this.state), '里程資訊無法取得（行車電腦故障或未配置），無法判斷加油站是否可抵達');
         assert(st.reachable, '此加油站超出可抵達範圍');
         this.state.navigation.targetId = st.id;
         this._log('event', `設定導航：${st.name}（${st.distanceKm} km）`);

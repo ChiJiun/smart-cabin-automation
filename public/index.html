@@ -28,7 +28,12 @@
     <div class="row2">
       <section class="panel" id="cockpit" aria-live="polite">
         <h2>座艙儀表 <span class="sub">Driver Display</span></h2>
-        <div id="cockpitBody"></div>
+        <div id="cockpitBody">
+          <div id="ckAlerts"></div>
+          <div id="ckIncident"></div>
+          <div id="ckCards"></div>
+          <div id="ckNav"></div>
+        </div>
       </section>
       <section class="panel" id="powerPanel">
         <h2>電力預算 <span class="sub">Power Budget</span></h2>
@@ -97,6 +102,7 @@
         <button class="btn sm" data-range="33">33</button>
         <button class="btn sm" data-range="40">40</button>
       </div>
+      <p class="hint" id="rangeRule"></p>
       <div class="ctl">
         <button class="btn" data-act="cancelNav" id="btnCancelNav">取消導航</button>
         <span class="hint" id="navNow"></span>

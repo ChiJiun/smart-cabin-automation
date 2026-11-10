@@ -78,7 +78,8 @@
 
 | 需求 | 實作 | 測試 | 畫面 |
 |---|---|---|---|
-| 續航里程 ≤ 30 km 觸發（≤ 10 km 升級為紅色 CRITICAL_RANGE） | `Engine.js`：`actions.setRange`；`rules.js`：`deriveMode`（ecu） | b4：range <= 30 km…、<= 10 km is critical…、hysteresis… | 操作台「25」「8」 |
+| 續航里程 ≤ 30 km 觸發（≤ 10 km 升級為紅色 CRITICAL_RANGE） | `Engine.js`：`actions.setRange`；`rules.js`：`deriveMode`（ecu） | b4：range <= 30 km…、<= 10 km is critical…、hysteresis… | 操作台「25」「8」；推薦表與操作台寫出遲滯規則（> 35 km 才解除） |
+| 里程由行車電腦回報 | `rules.js`：`ecuAvailable`、`computeAlerts`（`range-unknown`）；`Engine.js`：`actions.setRange` 日誌 | b4：ECU fault -> range unknown、without an ECU the range is unknown…、a faulted ECU does not report the range… | ECU 故障或刪除後，儀表顯示「里程資訊無法取得」 |
 | 以剩餘里程 × 0.9 篩選可抵達加油站 POI | `rules.js`：`computeNavigation` | b4：range <= 30 km shows warning and reachable stations… | 推薦表標題顯示計算式 |
 | 依距離排序顯示站名、距離、預估抵達消耗 | `app.js`：`navigationHtml` | b4：range <= 30 km…（sorted by distance） | 推薦表 |
 | 提供模擬導航設定 | `Engine.js`：`actions.navigate`、`actions.cancelNavigation`、`_reconcileNavigation` | b4：navigation only to reachable stations…、navigation can be cancelled、a target that falls out of range… | 「設定導航」「導航中・取消」「取消導航」 |

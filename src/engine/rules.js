@@ -155,9 +155,14 @@ function deriveSystemLevel(state) {
 }
 
 // ---------- Behavior 4: stations ----------
+// The range reaches the system through the trip computer (ECU). Without a working one (faulted or
+// not configured) the range is unknown, so no station can be judged reachable.
+function ecuAvailable(state) {
+  return healthy(state, 'ecu');
+}
+
 function computeNavigation(state, stations, haversineKm) {
-  const ecu = state.devices.find((d) => d.type === 'ecu');
-  const ecuOk = ecu && !ecu.fault;
+  const ecuOk = ecuAvailable(state);
   const { rangeKm, position } = state.environment;
   const { reachableFactor, fuelLPerKm } = state.settings;
   const list = stations.map((s) => {
@@ -209,9 +214,9 @@ function computeAlerts(state, power) {
     alerts.push({ id: 'siren', priority: 3, level: 'warning', title: `${dir}有救護車，請注意避讓`, message: '娛樂音響已靜音' });
   }
 
-  const ecuFaulted = byType('ecu').some((d) => d.fault);
-  if (ecuFaulted) {
-    alerts.push({ id: 'range-unknown', priority: 4, level: 'warning', title: '里程資訊無法取得', message: '行車電腦故障' });
+  if (!ecuAvailable(state)) {
+    const configured = byType('ecu').length > 0;
+    alerts.push({ id: 'range-unknown', priority: 4, level: 'warning', title: '里程資訊無法取得', message: configured ? '行車電腦故障' : '未配置行車電腦' });
   } else if (state.lowRange.active) {
     const critical = state.environment.rangeKm <= state.settings.criticalRangeKm;
     const n = state.navigationView.recommended.length;
@@ -241,7 +246,7 @@ function computeAlerts(state, power) {
   }
 
   for (const d of state.devices) {
-    if (!d.fault || d.type === 'ecu') continue;
+    if (!d.fault || (d.type === 'ecu' && !ecuAvailable(state))) continue; // range-unknown already covers it
     const side = SIDE_LABEL[d.props.side] || '';
     if (d.type === 'bsd_radar') {
       alerts.push({ id: `fault-${d.id}`, priority: 6, level: 'info', title: `${side}盲區輔助失效`, message: `${d.name} 故障，無法偵測盲區來車` });
@@ -264,6 +269,6 @@ function computeAlerts(state, power) {
 
 module.exports = {
   hvacAutoLevel, applyClimate, deriveMode, deriveStatus, deriveZoneStatus, deriveSystemLevel, muteReasons,
-  sirenDetected, radarDetects, turnSignalActive, laneChangeConflict,
+  sirenDetected, radarDetects, turnSignalActive, laneChangeConflict, ecuAvailable,
   computeNavigation, computeAlerts, DIRECTION_LABEL, ECALL_SERVICE_LABEL, STATUSES, SYSTEM_LEVELS,
 };

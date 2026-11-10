@@ -97,3 +97,14 @@ test('B3: turn signal fault -> the turn signal cannot be ACTIVE, LED only steady
   assert.equal(dev('mirror-left').mode, 'STEADY');
   assert.equal(s().buzzer, false);
 });
+
+test('B3: a cleared alert is logged with the title the driver saw, not its internal id', () => {
+  const { act, s } = setup();
+  act('blindSpot', { side: 'left', detected: true });
+  act('turnSignal', { value: 'left' });
+  act('turnSignal', { value: 'off' });
+  const msgs = s().log.map((l) => l.message);
+  assert.ok(msgs.includes('警示：左側盲區有來車'));
+  assert.ok(msgs.includes('警示解除：左側盲區有來車'));
+  assert.ok(!msgs.some((m) => m.includes('blindspot-left')));
+});
