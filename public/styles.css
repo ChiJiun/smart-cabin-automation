@@ -231,6 +231,7 @@ tr.target td { background: var(--ok-bg); }
 .log .t { color: var(--muted); font-variant-numeric: tabular-nums; }
 .log .k { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--muted); }
 .log .k.event { color: var(--accent); } .log .k.alert { color: var(--crit); } .log .k.power { color: var(--warn); } .log .k.config { color: var(--p2); }
+.log .k.rule { color: var(--ok); } .log .k.device { color: var(--p0); } .log .k.system { color: var(--muted); }
 
 .toast {
   position: fixed; right: 16px; bottom: 16px; z-index: 50;

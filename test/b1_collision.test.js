@@ -149,7 +149,7 @@ test('B1: front dashcam fault -> rear dashcam uploads; eCall fault -> manual 119
   assert.equal(dev('dashcam-rear').mode, 'UPLOADING');
   assert.equal(s().incident.ecallState, 'FAULT');
   assert.match(s().mainAlert.message, /手動撥打 119（救護） 或 110（警政）/);
-  assert.throws(() => act('selectEcall', { service: '119' }), /倒數期間/);
+  assert.throws(() => act('selectEcall', { service: '119' }), /自動通報已中斷/);
   assert.equal(s().incident.ecallState, 'FAULT');
 });
 
@@ -160,7 +160,7 @@ test('B1: an eCall fault during the countdown interrupts the call at once, even 
   act('setFault', { id: 'ecall', fault: true });
   // immediate: no tick needed, so the TA's 119/110/cancel buttons are disabled right away
   assert.equal(s().incident.ecallState, 'FAULT');
-  assert.throws(() => act('selectEcall', { service: '110' }), /倒數期間/);
+  assert.throws(() => act('selectEcall', { service: '110' }), /自動通報已中斷/);
   assert.throws(() => act('cancelEcall'), /倒數/);
   e.tick(8);
   assert.equal(s().incident.ecallState, 'FAULT');
@@ -183,7 +183,7 @@ test('B1: an upload without a source resumes when a dashcam becomes available ag
   act('setFault', { id: 'dashcam-rear', fault: false });
   assert.equal(s().incident.uploadSource, 'dashcam-rear');
   assert.equal(dev('dashcam-rear').mode, 'UPLOADING');
-  assert.ok(s().log.some((l) => /「後行車記錄器」恢復可用，開始上傳影像/.test(l.message)));
+  assert.ok(s().log.some((l) => /「後行車記錄器」可用，開始上傳影像/.test(l.message)));
   e.tick(10);
   assert.equal(dev('dashcam-rear').mode, 'UPLOADED');
 });
@@ -232,4 +232,35 @@ test('B1: the rear-collision scenario loads a rear impact with the rear dashcam 
   assert.match(s().mainAlert.title, /後方撞擊事故（5.5 g）/);
   assert.equal(dev('seat-driver').powerState, 'SHED');
   assert.equal(dev('seat-driver').powerReason, 'EMERGENCY_RESERVE');
+});
+
+test('B1: deleting the dashcam after the upload completed keeps the evidence (no re-upload)', () => {
+  const { e, act, s, dev } = setup();
+  act('impact', { g: 6 });
+  e.tick(10);
+  assert.equal(s().incident.uploadProgress, 100);
+  e.deleteDevice('dashcam-front');
+  assert.equal(s().incident.uploadSource, null);
+  assert.equal(s().incident.uploadDone, true);
+  assert.equal(s().incident.uploadProgress, 100);
+  assert.equal(dev('dashcam-rear').mode, 'EMERGENCY_LOCK');
+  assert.ok(s().log.some((l) => /影像已完成雲端存證，不需重傳/.test(l.message)));
+  e.tick(2);
+  assert.equal(dev('dashcam-rear').mode, 'EMERGENCY_LOCK');
+});
+
+test('B1: an eCall fault after CONNECTED is still reported as a device fault alert', () => {
+  const { e, act, s } = setup();
+  act('impact', { g: 6 });
+  e.tick(10);
+  assert.equal(s().incident.ecallState, 'CONNECTED');
+  act('setFault', { id: 'ecall', fault: true });
+  assert.equal(s().incident.ecallState, 'CONNECTED');
+  assert.ok(s().alerts.some((a) => a.id === 'fault-ecall'));
+  // while the interrupted call itself is FAULT the collision alert already says to dial manually
+  const other = setup();
+  other.act('setFault', { id: 'ecall', fault: true });
+  other.act('impact', { g: 6 });
+  assert.ok(!other.s().alerts.some((a) => a.id === 'fault-ecall'));
+  assert.throws(() => other.act('selectEcall', { service: '119' }), /自動通報已中斷/);
 });

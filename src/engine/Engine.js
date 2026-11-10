@@ -85,7 +85,7 @@ class Engine extends EventEmitter {
     return {
       active: false, direction: null, impactG: null, startedAt: null,
       ecallState: 'STANDBY', ecallService: null, ecallRemainingS: null, callStartedAt: null, connectedAt: null,
-      uploadSource: null, uploadProgress: 0,
+      uploadSource: null, uploadProgress: 0, uploadDone: false,
     };
   }
 
@@ -242,7 +242,7 @@ class Engine extends EventEmitter {
       inc.ecallRemainingS = 0;
       this._log('rule', 'eCall 模組故障，自動通報中斷：請手動撥打 119（救護）或 110（警政）');
     }
-    if (inc.uploadProgress < 100) {
+    if (inc.uploadProgress < 100 && !inc.uploadDone) {
       const src = inc.uploadSource ? this.state.devices.find((d) => d.id === inc.uploadSource) : null;
       if (src && src.fault) this._reassignUploadSource(`「${src.name}」上傳中故障`);
       else if (!src) {
@@ -250,7 +250,7 @@ class Engine extends EventEmitter {
         if (next) {
           inc.uploadSource = next.id;
           inc.uploadProgress = 0;
-          this._log('rule', `「${next.name}」恢復可用，開始上傳影像`);
+          this._log('rule', `「${next.name}」可用，開始上傳影像`);
         } else if (inc.uploadSource) {
           inc.uploadSource = null;
         }
@@ -346,6 +346,7 @@ class Engine extends EventEmitter {
           connectedAt: null,
           uploadSource: source ? source.id : null,
           uploadProgress: 0,
+          uploadDone: false,
         });
         this._log('event', `${dirLabel}撞擊 ${g} g ≥ ${st.impactThresholdG} g：系統等級升為 CRITICAL_EMERGENCY（碰撞方向：${dirLabel}）`);
         if (source && source.props.position === direction) this._log('rule', `受撞擊側（${dirLabel}）記錄器「${source.name}」優先上傳影像，其餘記錄器進入 EMERGENCY_LOCK`);
@@ -363,8 +364,8 @@ class Engine extends EventEmitter {
       selectEcall(a) {
         const inc = this.state.incident;
         assert(inc.active, '目前沒有事故');
+        assert(inc.ecallState !== 'FAULT', 'eCall 模組故障，自動通報已中斷，請手動撥打 119 或 110');
         assert(inc.ecallState === 'COUNTDOWN', '只有在倒數期間可以選擇撥打對象');
-        assert(!this._ecallFaulted(), 'eCall 模組故障，請手動撥打');
         const service = String(a.service);
         assert(service === '119' || service === '110', 'service 必須是 119 或 110');
         inc.ecallService = service;
@@ -614,7 +615,17 @@ class Engine extends EventEmitter {
     const [cfg] = this.config.devices.splice(idx, 1);
     this.state.devices = this.state.devices.filter((d) => d.id !== id);
     this._log('config', `刪除設備：${cfg.name}`);
-    if (this.state.incident.uploadSource === id) this._reassignUploadSource(`「${cfg.name}」已移除`);
+    const inc = this.state.incident;
+    if (inc.uploadSource === id) {
+      if (inc.uploadProgress >= 100) {
+        // Evidence already uploaded: nothing to redo, keep the completed state.
+        inc.uploadSource = null;
+        inc.uploadDone = true;
+        this._log('rule', `「${cfg.name}」已移除，影像已完成雲端存證，不需重傳`);
+      } else {
+        this._reassignUploadSource(`「${cfg.name}」已移除`);
+      }
+    }
     this.evaluate();
   }
 

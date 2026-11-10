@@ -21,6 +21,7 @@ function applyClimate(state) {
   const { ambientTempC } = state.environment;
   const { targetTempC } = state.settings;
   for (const d of state.devices) {
+    if (d.fault) continue; // a faulted unit cannot follow the rule (and must not log adjustments)
     if (d.type === 'hvac' && d.auto) {
       d.on = true;
       d.level = hvacAutoLevel(ambientTempC, targetTempC);
@@ -198,8 +199,8 @@ function computeAlerts(state, power) {
     if (!d.fault || d.type === 'ecu') continue;
     if (d.type === 'mirror') {
       alerts.push({ id: `fault-${d.id}`, priority: 6, level: 'info', title: `${SIDE_LABEL[d.props.side]}盲區輔助失效`, message: `${d.name} 故障` });
-    } else if (d.type === 'ecall' && incident.active) {
-      // already covered by the collision alert
+    } else if (d.type === 'ecall' && incident.active && incident.ecallState === 'FAULT') {
+      // the collision alert already tells the driver to dial manually
     } else {
       alerts.push({ id: `fault-${d.id}`, priority: 6, level: 'info', title: `${d.name} 故障`, message: '設備已停止運作' });
     }

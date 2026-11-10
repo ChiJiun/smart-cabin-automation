@@ -80,3 +80,17 @@ test('B6: the HVAC auto log shows the rated demand even when the supply is reduc
   assert.equal(dev('hvac').effectiveLevel, 1);
   assert.ok(s().log.some((l) => /自動依溫差調節 1 → 5 檔（需求 60 → 300 W）/.test(l.message)));
 });
+
+test('B6: a faulted HVAC does not follow the climate rule and logs no automatic adjustment', () => {
+  const { act, s, dev } = setup();
+  act('setFault', { id: 'hvac', fault: true });
+  const mark = s().log.length;
+  act('setAmbient', { celsius: -6 });
+  assert.equal(dev('hvac').level, 1);
+  assert.equal(dev('hvac').drawW, 0);
+  assert.ok(!s().log.slice(mark).some((l) => /自動依溫差調節/.test(l.message)));
+  const mark2 = s().log.length;
+  act('setFault', { id: 'hvac', fault: false });
+  assert.equal(dev('hvac').level, 5);
+  assert.ok(s().log.slice(mark2).some((l) => /自動依溫差調節 1 → 5 檔/.test(l.message)));
+});
