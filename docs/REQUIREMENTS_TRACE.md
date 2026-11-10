@@ -71,7 +71,7 @@
 | 盲區雷達回報 DETECTED 且同側方向燈為 ACTIVE | `rules.js`：`radarDetects`、`turnSignalActive`、`laneChangeConflict` | b3：radar reports DETECTED / CLEAR and the turn signal reports ACTIVE | 「盲區監測」卡片的雷達與方向燈狀態 |
 | 該側後視鏡 LED 快速閃爍（FLASHING） | `rules.js`：`deriveMode`（mirror） | b3：same-side detection + turn signal -> flashing + buzzer | 盲區監測卡片的 LED 燈號 |
 | 中控蜂鳴器持續發出警示音 | `rules.js`：`buzzerDemanded`；`app.js`：`updateSound` | b3：same-side detection…、buzzer fault… | 「中控蜂鳴器」小卡；開啟警示音可聽到 |
-| 關閉方向燈或車輛離開後立即解除 | 每次狀態變化重新推導 | b3：warning clears immediately… | 方向燈按「關」或再按「左盲區有車」 |
+| 關閉方向燈或車輛離開後立即解除 | 每次狀態變化重新推導 | b3：warning clears immediately… | 方向燈按「關」，或按「左盲區有車（點擊讓車離開）」 |
 | 僅盲區有車但未打燈則 LED 恆亮不鳴響 | `rules.js`：`deriveMode`（mirror STEADY） | b3：same-side detection…、opposite turn signal does not trigger | LED「恆亮」、蜂鳴器「靜止」 |
 
 ### 行為 4：剩餘里程過低與加油站導航推薦
@@ -79,7 +79,7 @@
 | 需求 | 實作 | 測試 | 畫面 |
 |---|---|---|---|
 | 續航里程 ≤ 30 km 觸發（≤ 10 km 升級為紅色 CRITICAL_RANGE） | `Engine.js`：`actions.setRange`；`rules.js`：`deriveMode`（ecu） | b4：range <= 30 km…、<= 10 km is critical…、hysteresis… | 操作台「25」「8」；推薦表與操作台寫出遲滯規則（> 35 km 才解除） |
-| 里程由行車電腦回報 | `rules.js`：`ecuAvailable`、`computeAlerts`（`range-unknown`）；`Engine.js`：`actions.setRange` 日誌 | b4：ECU fault -> range unknown、without an ECU the range is unknown…、a faulted ECU does not report the range… | ECU 故障或刪除後，儀表顯示「里程資訊無法取得」 |
+| 里程由行車電腦回報 | `rules.js`：`ecuAvailable`、`computeAlerts`（`range-unknown`）；`Engine.js`：`actions.setRange` 日誌 | b4：navigation only to reachable stations; ECU fault -> range unknown、without an ECU the range is unknown…、a faulted ECU does not report the range… | ECU 故障或刪除後，儀表顯示「里程資訊無法取得」 |
 | 以剩餘里程 × 0.9 篩選可抵達加油站 POI | `rules.js`：`computeNavigation` | b4：range <= 30 km shows warning and reachable stations… | 推薦表標題顯示計算式 |
 | 依距離排序顯示站名、距離、預估抵達消耗 | `app.js`：`navigationHtml` | b4：range <= 30 km…（sorted by distance） | 推薦表 |
 | 提供模擬導航設定 | `Engine.js`：`actions.navigate`、`actions.cancelNavigation`、`_reconcileNavigation` | b4：navigation only to reachable stations…、navigation can be cancelled、a target that falls out of range… | 「設定導航」「導航中・取消」「取消導航」 |

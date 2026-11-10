@@ -567,8 +567,13 @@ function renderConsole(s) {
   const faults = s.devices.filter((d) => d.fault).map((d) => d.name);
   $('#faultList').textContent = faults.length ? `故障中：${faults.join('、')}` : '目前沒有故障設備';
 
-  $('#bsLeft').classList.toggle('on', s.sensors.blindSpot.left);
-  $('#bsRight').classList.toggle('on', s.sensors.blindSpot.right);
+  for (const [id, side, label] of [['#bsLeft', 'left', '左'], ['#bsRight', 'right', '右']]) {
+    const on = s.sensors.blindSpot[side];
+    const b = $(id);
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+    b.textContent = on ? `${label}盲區有車（點擊讓車離開）` : `${label}盲區有車`;
+  }
   $('#btnSirenOn').classList.toggle('on', s.sensors.siren.active);
   for (const v of ['left', 'off', 'right']) $(`#ts${v[0].toUpperCase() + v.slice(1)}`).classList.toggle('on', s.sensors.turnSignal === v);
   $('#btnAlt').classList.toggle('on', s.power.alternatorFault);
