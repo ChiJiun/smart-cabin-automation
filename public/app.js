@@ -133,9 +133,18 @@ async function act(action) {
     const res = await fetch('/api/actions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action) });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || `${res.status} ${res.statusText}`);
-    // A scenario or a reset replaces the whole state, so a console value typed but never sent is stale.
-    if (['scenario', 'reset', 'factoryReset'].includes(action.type)) dirtyInputs.clear();
-    render(body);
+    // A scenario or a reset replaces the whole state, so a console value typed but never sent is
+    // stale: show the new state's values even in a field that still has the focus.
+    const replaced = ['scenario', 'reset', 'factoryReset'].includes(action.type);
+    if (replaced) {
+      dirtyInputs.clear();
+      forceConsoleSync = true;
+    }
+    try {
+      render(body);
+    } finally {
+      forceConsoleSync = false;
+    }
   } catch (err) {
     toast(err.message);
     forceRender();
