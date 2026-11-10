@@ -31,9 +31,12 @@ function laneChangeConflict(state, side) {
   return radarDetects(state, side) && turnSignalActive(state, side);
 }
 
-// The dashboard buzzer sounds continuously during a lane-change conflict (and a collision).
+// The dashboard buzzer sounds continuously during a lane-change conflict (Behavior 3). After a
+// collision it also sounds while the eCall countdown waits for the driver (call 119 / 110 or cancel).
 function buzzerDemanded(state) {
-  return state.incident.active || ['left', 'right'].some((side) => laneChangeConflict(state, side));
+  const { incident } = state;
+  return (incident.active && incident.ecallState === 'COUNTDOWN')
+    || ['left', 'right'].some((side) => laneChangeConflict(state, side));
 }
 
 // ---------- Behavior 6: climate ----------

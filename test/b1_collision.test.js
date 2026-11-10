@@ -286,3 +286,17 @@ test('B1: the struck side and the zones holding emergency devices are shown as E
   assert.equal(s().zoneStatus.rear_cabin, 'SHED'); // P2/P3 forced off for the emergency reserve
   assert.equal(s().zoneStatus.powertrain, 'NORMAL');
 });
+
+test('B1: the buzzer sounds while the eCall countdown waits for the driver, then stops', () => {
+  const { e, act, s, dev } = setup();
+  act('impact', { g: 6 });
+  assert.equal(dev('buzzer').mode, 'ALARM');
+  e.tick(10); // countdown ends -> CONNECTED
+  assert.equal(dev('ecall').mode, 'CONNECTED');
+  assert.equal(s().buzzer, false);
+  act('clearIncident');
+  act('impact', { g: 6 });
+  act('cancelEcall');
+  assert.equal(s().buzzer, false);
+  assert.equal(s().systemLevel, 'CRITICAL_EMERGENCY'); // the incident itself is still active
+});

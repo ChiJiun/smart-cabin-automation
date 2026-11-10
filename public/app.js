@@ -67,9 +67,13 @@ function renderHeader(s) {
   $('#clockTime').textContent = fmtTime(s.simTime);
   $('#clockDot').classList.toggle('running', s.clockRunning);
   $('#clockToggle').textContent = s.clockRunning ? '暫停' : '繼續';
+  // Only touch the live region when the level changes, so screen readers are not re-notified every tick.
   const lvl = $('#sysLevel');
-  lvl.className = `badge syslevel ${s.systemLevel}`;
-  lvl.textContent = `系統等級 ${s.systemLevel}（${SYSTEM_LEVEL_LABEL[s.systemLevel] || ''}）`;
+  const text = `系統等級 ${s.systemLevel}（${SYSTEM_LEVEL_LABEL[s.systemLevel] || ''}）`;
+  if (lvl.textContent !== text) {
+    lvl.className = `badge syslevel ${s.systemLevel}`;
+    lvl.textContent = text;
+  }
 }
 
 function audioCardText(audio) {
