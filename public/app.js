@@ -133,6 +133,8 @@ async function act(action) {
     const res = await fetch('/api/actions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action) });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || `${res.status} ${res.statusText}`);
+    // A scenario or a reset replaces the whole state, so a console value typed but never sent is stale.
+    if (['scenario', 'reset', 'factoryReset'].includes(action.type)) dirtyInputs.clear();
     render(body);
   } catch (err) {
     toast(err.message);
@@ -356,13 +358,19 @@ function renderEcallWindow(s) {
   const wasHidden = w.hidden;
   w.hidden = ecallMinimisedKey === key;
   if (ecallRenderedKey !== key) {
+    const hadFocus = w.contains(document.activeElement);
     w.innerHTML = ecallWindowHtml(s);
     ecallRenderedKey = key;
-    // A new incident opens the window with the keyboard focus on its first choice (10 s to decide).
     if (!w.hidden && ecallFocusedId !== inc.id) {
+      // A new incident opens the window with the keyboard focus on its first choice (10 s to decide).
       ecallFocusedId = inc.id;
       const first = w.querySelector('.cw-actions button, .cw-cancel');
       if (first) first.focus({ preventScroll: true });
+    } else if (hadFocus && !w.hidden) {
+      // Same incident, new call state (e.g. after "撥打 110"): the pressed button is gone, so focus
+      // the window's main button, or the window itself when it has none.
+      const main = [...w.querySelectorAll('button')].find((b) => !b.hasAttribute('aria-label')) || w;
+      main.focus({ preventScroll: true });
     }
   } else {
     updateEcallWindow(s); // keep focus on the buttons: only refresh the changing numbers
