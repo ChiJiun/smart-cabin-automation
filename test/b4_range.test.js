@@ -50,3 +50,29 @@ test('B4: navigation only to reachable stations; ECU fault -> range unknown', ()
   assert.ok(s().alerts.some((a) => a.title === '里程資訊無法取得'));
   assert.equal(s().navigationView.recommended.length, 0);
 });
+
+test('B4: navigation can be cancelled', () => {
+  const { act, s } = setup();
+  act('setRange', { km: 25 });
+  const near = s().navigationView.recommended[0];
+  act('navigate', { stationId: near.id });
+  act('cancelNavigation');
+  assert.equal(s().navigationView.targetId, null);
+  assert.match(s().log.at(-1).message, new RegExp(`取消導航：${near.name}`));
+  assert.throws(() => act('cancelNavigation'), /沒有導航目標/);
+});
+
+test('B4: a target that falls out of range is dropped automatically; an ECU fault keeps it', () => {
+  const { act, s } = setup();
+  act('setRange', { km: 25 });
+  const rec = s().navigationView.recommended;
+  const far = rec[rec.length - 1];
+  act('navigate', { stationId: far.id });
+  act('setFault', { id: 'ecu', fault: true });
+  assert.equal(s().navigationView.targetId, far.id); // range unknown: keep guiding
+  act('setFault', { id: 'ecu', fault: false });
+  act('setRange', { km: Math.floor(far.distanceKm / 0.9) - 1 });
+  assert.equal(s().navigationView.targetId, null);
+  assert.ok(s().log.some((l) => l.kind === 'rule' && new RegExp(`導航目標「${far.name}」.*已超出可抵達範圍.*自動取消導航`).test(l.message)));
+  assert.ok(s().navigationView.recommended.every((st) => st.id !== far.id));
+});

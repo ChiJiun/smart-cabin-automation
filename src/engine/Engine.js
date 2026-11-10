@@ -16,7 +16,9 @@ class ValidationError extends Error {
 }
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
-const LOG_LIMIT = 300;
+const LOG_LIMIT = 2000; // kept in memory for export; the dashboard shows the most recent entries
+
+const fmtSimTime = (t) => `T+${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
 
 function assert(cond, message) {
   if (!cond) throw new ValidationError(message);
@@ -143,15 +145,18 @@ class Engine extends EventEmitter {
     });
     s.power = { ...s.power, ...power };
     s.navigationView = rules.computeNavigation(s, STATIONS, haversineKm);
+    this._reconcileNavigation();
     s.alerts = rules.computeAlerts(s, power);
     s.mainAlert = s.alerts[0] || null;
-    s.buzzer = s.alerts.some((a) => a.id === 'collision' || a.id.startsWith('blindspot-'));
+    s.buzzer = s.devices.some((d) => d.type === 'buzzer' && d.mode === 'ALARM');
+    s.systemLevel = rules.deriveSystemLevel(s);
     for (const d of s.devices) {
       if (d.type === 'display' && !d.fault) {
         d.mode = !s.mainAlert ? 'NORMAL' : s.mainAlert.level === 'critical' ? 'EMERGENCY' : s.mainAlert.level === 'warning' ? 'WARNING' : 'NORMAL';
       }
       d.status = rules.deriveStatus(d);
     }
+    s.zoneStatus = Object.fromEntries(this.config.zones.map((z) => [z.id, rules.deriveZoneStatus(s.devices.filter((d) => d.zone === z.id))]));
     this._logChanges();
     this.emit('change');
   }
@@ -159,8 +164,8 @@ class Engine extends EventEmitter {
   _snapshot() {
     const s = this.state;
     const devices = {};
-    for (const d of s.devices) devices[d.id] = { mode: d.mode, powerState: d.powerState, effectiveLevel: d.effectiveLevel, level: d.level, auto: d.auto, ratedW: d.ratedW, name: d.name };
-    return { devices, powerStatus: s.power.status, alerts: s.alerts.map((a) => a.id + '|' + a.title) };
+    for (const d of s.devices) devices[d.id] = { type: d.type, mode: d.mode, on: d.on, powerState: d.powerState, effectiveLevel: d.effectiveLevel, level: d.level, auto: d.auto, ratedW: d.ratedW, name: d.name };
+    return { devices, powerStatus: s.power.status, systemLevel: s.systemLevel, alerts: s.alerts.map((a) => a.id + '|' + a.title) };
   }
 
   _logChanges() {
@@ -168,13 +173,22 @@ class Engine extends EventEmitter {
     const prev = this._prevSnapshot;
     this._prevSnapshot = now;
     if (!prev) return;
+    const { ambientTempC } = this.state.environment;
+    const st = this.state.settings;
+    if (prev.systemLevel !== now.systemLevel) this._log('system', `系統等級：${prev.systemLevel} → ${now.systemLevel}`);
     for (const [id, d] of Object.entries(now.devices)) {
       const p = prev.devices[id];
       if (!p) continue;
-      if (p.mode !== d.mode) this._log('device', `${d.name}：${p.mode} → ${d.mode}`);
-      // Behavior 6: a level chosen by the climate rule (auto mode) is logged so the TA can trace it.
-      // Watts are the level's rated demand; actual (possibly reduced) supply is covered by the power log.
+      // Behavior 6: whatever the climate rule decides in auto mode is logged (cause before effect) so
+      // the TA can trace it. Watts are the level's rated demand; the actual, possibly reduced, supply
+      // is covered by the power log.
       if (d.auto && p.level !== d.level) this._log('rule', `${d.name}：自動依溫差調節 ${p.level} → ${d.level} 檔（需求 ${p.level * d.ratedW} → ${d.level * d.ratedW} W）`);
+      if (d.type === 'defroster' && d.auto && p.on !== d.on) {
+        this._log('rule', d.on
+          ? `車外 ${ambientTempC} °C ≤ ${st.defrostOnC} °C：自動開啟${d.name}`
+          : `車外 ${ambientTempC} °C > ${st.defrostOffC} °C：自動關閉${d.name}`);
+      }
+      if (p.mode !== d.mode) this._log('device', `${d.name}：${p.mode} → ${d.mode}`);
       if (p.powerState !== d.powerState || p.effectiveLevel !== d.effectiveLevel) {
         if (p.powerState !== d.powerState || d.powerState === 'REDUCED') {
           const lvl = d.powerState === 'REDUCED' ? `（檔位 ${d.effectiveLevel}）` : '';
@@ -256,6 +270,26 @@ class Engine extends EventEmitter {
         }
       }
     }
+  }
+
+  /**
+   * Behavior 4: a navigation target that is no longer reachable with the remaining range is dropped
+   * (the driver is shown the stations that are still reachable). While the ECU is faulted the range
+   * is unknown, so the chosen target is kept.
+   */
+  _reconcileNavigation() {
+    const s = this.state;
+    const id = s.navigation.targetId;
+    if (!id) return;
+    const ecu = s.devices.find((d) => d.type === 'ecu');
+    if (!ecu || ecu.fault) return;
+    const st = s.navigationView.stations.find((x) => x.id === id);
+    if (st && st.reachable) return;
+    s.navigation.targetId = null;
+    this._log('rule', st
+      ? `導航目標「${st.name}」（${st.distanceKm} km）已超出可抵達範圍（${s.navigationView.reachableKm} km），自動取消導航`
+      : '導航目標已不存在，自動取消導航');
+    s.navigationView = rules.computeNavigation(s, STATIONS, haversineKm);
   }
 
   _ecallFaulted() {
@@ -348,7 +382,8 @@ class Engine extends EventEmitter {
           uploadProgress: 0,
           uploadDone: false,
         });
-        this._log('event', `${dirLabel}撞擊 ${g} g ≥ ${st.impactThresholdG} g：系統等級升為 CRITICAL_EMERGENCY（碰撞方向：${dirLabel}）`);
+        // The system-level transition (-> CRITICAL_EMERGENCY) is logged by _logChanges().
+        this._log('event', `${dirLabel}碰撞傳感器回報 ${g} g ≥ ${st.impactThresholdG} g：啟動事故流程（碰撞方位：${dirLabel}）`);
         if (source && source.props.position === direction) this._log('rule', `受撞擊側（${dirLabel}）記錄器「${source.name}」優先上傳影像，其餘記錄器進入 EMERGENCY_LOCK`);
         if (source && source.props.position !== direction) this._log('rule', `${dirLabel}記錄器無法使用，改由「${source.name}」上傳影像`);
         if (!source) this._log('rule', '沒有可用的行車記錄器，無法上傳影像');
@@ -391,7 +426,16 @@ class Engine extends EventEmitter {
         const direction = a.direction ?? this.state.sensors.siren.direction;
         assert(rules.DIRECTION_LABEL[direction], '方位必須是 front / rear / left / right');
         this.state.sensors.siren = { active, direction };
-        this._log('event', active ? `偵測到救護車笛聲（${rules.DIRECTION_LABEL[direction]}）` : '救護車笛聲結束');
+        const dir = rules.DIRECTION_LABEL[direction];
+        if (!active) {
+          this._log('event', '救護車笛聲結束');
+          return;
+        }
+        // The siren is part of the environment; it only takes effect once an audio sensor hears it
+        // (a sensor repaired while the siren is still sounding picks it up on the next evaluation).
+        const sensors = this.state.devices.filter((d) => d.type === 'audio_sensor');
+        if (sensors.some((d) => !d.fault)) this._log('event', `音訊傳感器偵測到緊急車輛笛聲，解析方位：${dir}`);
+        else this._log('event', `${dir}出現救護車笛聲，但${sensors.length ? '音訊傳感器故障' : '未配置音訊傳感器'}，未被偵測`);
       },
       // Behavior 3
       blindSpot(a) {
@@ -421,6 +465,13 @@ class Engine extends EventEmitter {
         this.state.navigation.targetId = st.id;
         this._log('event', `設定導航：${st.name}（${st.distanceKm} km）`);
       },
+      cancelNavigation() {
+        const id = this.state.navigation.targetId;
+        assert(id, '目前沒有導航目標');
+        const st = STATIONS.find((x) => x.id === id);
+        this.state.navigation.targetId = null;
+        this._log('event', `取消導航：${st ? st.name : id}`);
+      },
       // Behavior 5
       setCapacity(a) {
         this.state.settings.capacityW = num(a.watts, '電力容量', { min: 0, max: 10000 });
@@ -434,15 +485,13 @@ class Engine extends EventEmitter {
       setAmbient(a) {
         const t = num(a.celsius, '車外溫度', { min: -20, max: 45 });
         const st = this.state.settings;
-        const was = this.state.climate.defrostActive;
         this.state.environment.ambientTempC = t;
+        // Hysteresis: defrost on at <= defrostOnC, off only above defrostOffC. Only an auto-mode
+        // defroster follows it (a manually overridden one is left alone); the automatic switching
+        // is logged by _logChanges(), also when a repaired defroster catches up with the rule.
         if (t <= st.defrostOnC) this.state.climate.defrostActive = true;
         else if (t > st.defrostOffC) this.state.climate.defrostActive = false;
         this._log('event', `車外溫度變為 ${t} °C`);
-        // Only an auto-mode defroster follows the rule; a manually overridden one is left alone.
-        const autoDefroster = this.state.devices.some((d) => d.type === 'defroster' && d.auto && !d.fault);
-        if (autoDefroster && !was && this.state.climate.defrostActive) this._log('rule', `車外 ${t} °C ≤ ${st.defrostOnC} °C：自動開啟後擋風除霧`);
-        if (autoDefroster && was && !this.state.climate.defrostActive) this._log('rule', `車外 ${t} °C > ${st.defrostOffC} °C：自動關閉後擋風除霧`);
       },
       // devices
       setDevice(a) {
@@ -575,7 +624,7 @@ class Engine extends EventEmitter {
       out.props = {};
       for (const p of t.props) {
         const v = input.props?.[p];
-        if (p === 'side') assert(v === 'left' || v === 'right', '後視鏡必須指定 side（left / right）');
+        if (p === 'side') assert(v === 'left' || v === 'right', '後視鏡與盲區雷達必須指定 side（left / right）');
         if (p === 'position') assert(v === 'front' || v === 'rear', '記錄器與碰撞傳感器必須指定 position（front / rear）');
         out.props[p] = v;
       }
@@ -643,6 +692,28 @@ class Engine extends EventEmitter {
     this.evaluate();
   }
 
+  // ---------------------------------------------------------------- log export
+  /** The full retained log (oldest first), so the TA can compare runs. */
+  exportLog() {
+    return {
+      simTime: this.state.simTime,
+      systemLevel: this.state.systemLevel,
+      entries: this.state.log.map((l) => ({ ...l, time: fmtSimTime(l.t) })),
+    };
+  }
+
+  exportLogCsv() {
+    // Guard against spreadsheet formula injection (device and zone names are user-editable).
+    const cell = (v) => {
+      let text = String(v);
+      if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+      return `"${text.replace(/"/g, '""')}"`;
+    };
+    const rows = ['seq,t,time,kind,message'];
+    for (const l of this.state.log) rows.push([l.seq, l.t, cell(fmtSimTime(l.t)), cell(l.kind), cell(l.message)].join(','));
+    return `\uFEFF${rows.join('\r\n')}\r\n`;
+  }
+
   // ---------------------------------------------------------------- view
   publicState() {
     const s = this.state;
@@ -660,9 +731,15 @@ class Engine extends EventEmitter {
       alerts: s.alerts,
       mainAlert: s.mainAlert,
       buzzer: s.buzzer,
-      zones: this.config.zones,
+      systemLevel: s.systemLevel,
+      zones: this.config.zones.map((z) => ({
+        ...z,
+        status: s.zoneStatus[z.id] || 'STANDBY',
+        drawW: s.devices.filter((d) => d.zone === z.id).reduce((acc, d) => acc + d.drawW, 0),
+      })),
       devices: s.devices.map((d) => ({ ...d, typeLabel: DEVICE_TYPES[d.type].label, userControl: !!DEVICE_TYPES[d.type].userControl, adjustable: !!DEVICE_TYPES[d.type].adjustable, minLevel: DEVICE_TYPES[d.type].minLevel, maxLevel: DEVICE_TYPES[d.type].maxLevel, hasAuto: !!DEVICE_TYPES[d.type].auto, variableLoad: !!DEVICE_TYPES[d.type].variableLoad })),
-      log: s.log.slice(-150),
+      log: s.log.slice(-200),
+      logTotal: s.log.length,
       scenarios: Object.entries(SCENARIOS).map(([id, v]) => ({ id, label: v.label, description: v.description })),
     };
   }
@@ -672,7 +749,7 @@ class Engine extends EventEmitter {
 const SCENARIOS = {
   'winter-overload': {
     label: '寒流夜間長途（電力超載）',
-    description: '車外 −6 °C，三個座椅加熱 3 檔、逆變器 200 W、兩台後座螢幕、音響 5 檔 → 需求 1293 W，卸載 P3 後降為 963 W',
+    description: '車外 −6 °C，三個座椅加熱 3 檔、逆變器 200 W、兩台後座螢幕、音響 5 檔 → 需求 1296 W（負載率 129.6%），卸載 P3 後降為 966 W',
     actions: [
       { type: 'setAmbient', celsius: -6 },
       { type: 'setDevice', id: 'seat-driver', on: true, level: 3 },

@@ -38,6 +38,17 @@ function createApp(engine = new Engine()) {
     req.on('close', () => engine.off('change', onChange));
   });
 
+  // ---- log export (TA reproducibility checks): full retained log as JSON or CSV
+  app.get('/api/log', (req, res) => {
+    if (req.query.format === 'csv') {
+      res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="smart-cabin-log.csv"' });
+      res.send(engine.exportLogCsv());
+    } else {
+      res.set('Content-Disposition', 'attachment; filename="smart-cabin-log.json"');
+      res.json(engine.exportLog());
+    }
+  });
+
   // ---- configuration (zones / devices / settings)
   app.get('/api/config', wrap(() => engine.getConfig()));
   app.post('/api/zones', wrap((req) => { engine.addZone(req.body); return engine.getConfig(); }));

@@ -27,7 +27,7 @@ test('reset restores the known initial state but keeps configuration', () => {
   assert.deepEqual(s().settings, json.settings);
   assert.equal(s().devices.find((d) => d.id === 'audio').priority, 3);
   assert.equal(s().devices.length, json.devices.length);
-  assert.equal(s().power.demandW, 208);
+  assert.equal(s().power.demandW, 211);
 });
 
 test('config: device priority affects shedding; safety devices locked to P0', () => {
@@ -93,4 +93,88 @@ test('device status is always one of the seven proposal statuses', () => {
   act('setFault', { id: 'ecu', fault: true });
   check();
   assert.ok(s().devices.every((d) => d.status !== 'OFF'));
+});
+
+test('system level: NORMAL / WARNING / CRITICAL follow the alerts; a P0 fault is a WARNING', () => {
+  const { act, s } = setup();
+  assert.equal(s().systemLevel, 'NORMAL');
+  act('siren', { active: true, direction: 'rear' });
+  assert.equal(s().systemLevel, 'WARNING');
+  act('blindSpot', { side: 'left', detected: true });
+  act('turnSignal', { value: 'left' });
+  assert.equal(s().systemLevel, 'CRITICAL');
+  act('reset');
+  act('setFault', { id: 'fridge', fault: true }); // P3 fault: informational only
+  assert.equal(s().systemLevel, 'NORMAL');
+  act('setFault', { id: 'ecall', fault: true }); // safety device fault
+  assert.equal(s().systemLevel, 'WARNING');
+  act('reset');
+  act('setRange', { km: 8 });
+  assert.equal(s().systemLevel, 'CRITICAL'); // red CRITICAL_RANGE
+});
+
+test('zone status is the most severe status of its devices', () => {
+  const { e, act, s } = setup();
+  const { deriveZoneStatus } = require('../src/engine/rules');
+  assert.equal(deriveZoneStatus([]), 'STANDBY');
+  assert.equal(deriveZoneStatus([{ status: 'STANDBY' }, { status: 'NORMAL' }]), 'NORMAL');
+  assert.equal(deriveZoneStatus([{ status: 'SHED' }, { status: 'DEFERRED' }]), 'SHED');
+  assert.equal(deriveZoneStatus([{ status: 'FAULT' }, { status: 'WARNING' }]), 'FAULT');
+  assert.equal(deriveZoneStatus([{ status: 'FAULT' }, { status: 'EMERGENCY' }]), 'EMERGENCY');
+  assert.equal(s().zoneStatus.rear_cabin, 'STANDBY'); // everything switched off
+  e.loadScenario('winter-overload');
+  assert.equal(s().zoneStatus.rear_cabin, 'DEFERRED');
+  act('setFault', { id: 'ecu', fault: true });
+  assert.equal(s().zoneStatus.powertrain, 'FAULT');
+  const zones = e.publicState().zones;
+  assert.equal(zones.find((z) => z.id === 'powertrain').status, 'FAULT');
+  assert.equal(zones.find((z) => z.id === 'rear_cabin').drawW, s().devices.filter((d) => d.zone === 'rear_cabin').reduce((a, d) => a + d.drawW, 0));
+  e.addZone({ id: 'trunk', name: '後車廂' });
+  assert.equal(e.publicState().zones.find((z) => z.id === 'trunk').status, 'STANDBY');
+});
+
+test('reproducibility: the same actions from a reset give the same state and log', () => {
+  const run = () => {
+    const { e, act } = setup();
+    e.loadScenario('winter-overload');
+    act('impact', { g: 7, direction: 'rear' });
+    act('clock', { command: 'step', seconds: 4 });
+    act('selectEcall', { service: '110' });
+    act('clock', { command: 'step', seconds: 10 });
+    act('siren', { active: true, direction: 'left' });
+    act('clearIncident');
+    act('setRange', { km: 9 });
+    const st = e.publicState();
+    return JSON.stringify({ log: e.exportLog(), devices: st.devices, power: st.power, alerts: st.alerts, systemLevel: st.systemLevel });
+  };
+  assert.equal(run(), run());
+});
+
+test('HTTP API: the full log can be exported as JSON and CSV', async () => {
+  const engine = new Engine();
+  engine.state.clockRunning = false;
+  engine.addDevice({ id: 'csv-test', type: 'fridge', name: '=HYPERLINK("x")', zone: 'rear_cabin' });
+  engine.dispatch({ type: 'setDevice', id: 'csv-test', on: true }); // logs a line that starts with the name
+  engine.dispatch({ type: 'impact', g: 6, direction: 'front' });
+  const server = http.createServer(createApp(engine)).listen(0);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    let r = await fetch(`${base}/api/log?format=json`);
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('content-disposition'), /smart-cabin-log\.json/);
+    const body = await r.json();
+    assert.equal(body.entries.length, engine.state.log.length);
+    assert.ok(body.entries.every((l, i) => l.seq === i + 1 && /^T\+\d\d:\d\d$/.test(l.time)));
+    r = await fetch(`${base}/api/log?format=csv`);
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('content-type'), /text\/csv/);
+    const csv = await r.text();
+    const lines = csv.replace(/^\uFEFF/, '').trim().split('\r\n');
+    assert.equal(lines[0], 'seq,t,time,kind,message');
+    assert.equal(lines.length, engine.state.log.length + 1);
+    assert.ok(lines.some((l) => l.includes('"\'=HYPERLINK(""x"")：OFF → ON"')), 'a cell that starts with = is neutralised');
+    assert.ok(!lines.some((l) => /(^|,)"[=+\-@]/.test(l)));
+  } finally {
+    server.close();
+  }
 });

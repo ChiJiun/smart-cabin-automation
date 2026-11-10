@@ -264,3 +264,25 @@ test('B1: an eCall fault after CONNECTED is still reported as a device fault ale
   assert.ok(!other.s().alerts.some((a) => a.id === 'fault-ecall'));
   assert.throws(() => other.act('selectEcall', { service: '119' }), /自動通報已中斷/);
 });
+
+test('B1: a collision raises the system level to CRITICAL_EMERGENCY until the incident is cleared', () => {
+  const { act, s } = setup();
+  assert.equal(s().systemLevel, 'NORMAL');
+  act('impact', { g: 6, direction: 'rear' });
+  assert.equal(s().systemLevel, 'CRITICAL_EMERGENCY');
+  assert.ok(s().log.some((l) => l.kind === 'system' && l.message === '系統等級：NORMAL → CRITICAL_EMERGENCY'));
+  act('cancelEcall');
+  assert.equal(s().systemLevel, 'CRITICAL_EMERGENCY'); // cancelling the call does not end the incident
+  act('clearIncident');
+  assert.equal(s().systemLevel, 'NORMAL');
+  assert.ok(s().log.some((l) => l.message === '系統等級：CRITICAL_EMERGENCY → NORMAL'));
+});
+
+test('B1: the struck side and the zones holding emergency devices are shown as EMERGENCY', () => {
+  const { act, s } = setup();
+  act('setDevice', { id: 'seat-rear', on: true });
+  act('impact', { g: 6, direction: 'front' });
+  assert.equal(s().zoneStatus.front, 'EMERGENCY'); // G-sensor + dashcam uploading
+  assert.equal(s().zoneStatus.rear_cabin, 'SHED'); // P2/P3 forced off for the emergency reserve
+  assert.equal(s().zoneStatus.powertrain, 'NORMAL');
+});
