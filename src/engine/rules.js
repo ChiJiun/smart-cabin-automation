@@ -11,6 +11,34 @@ const SIDE_LABEL = { left: '左側', right: '右側' };
 // Behavior 1: which emergency service the eCall dials.
 const ECALL_SERVICE_LABEL = { 119: '119（救護）', 110: '110（警政）', both: '119（救護）並通報 110（警政）' };
 
+// ---------- sensors ----------
+// A reading only counts when a working sensor of the right kind reports it.
+const healthy = (state, type, pred = () => true) => state.devices.some((d) => d.type === type && !d.fault && pred(d));
+
+// Behavior 2: the audio sensor picks up the emergency-vehicle siren (and its bearing).
+function sirenDetected(state) {
+  return !!state.sensors.siren.active && healthy(state, 'audio_sensor');
+}
+
+// Behavior 3: blind-spot radar reports DETECTED; the turn signal on that side is ACTIVE.
+function radarDetects(state, side) {
+  return !!state.sensors.blindSpot[side] && healthy(state, 'bsd_radar', (d) => d.props.side === side);
+}
+function turnSignalActive(state, side) {
+  return state.sensors.turnSignal === side && healthy(state, 'turn_signal');
+}
+function laneChangeConflict(state, side) {
+  return radarDetects(state, side) && turnSignalActive(state, side);
+}
+
+// The dashboard buzzer sounds continuously during a lane-change conflict (Behavior 3). After a
+// collision it also sounds while the eCall countdown waits for the driver (call 119 / 110 or cancel).
+function buzzerDemanded(state) {
+  const { incident } = state;
+  return (incident.active && incident.ecallState === 'COUNTDOWN')
+    || ['left', 'right'].some((side) => laneChangeConflict(state, side));
+}
+
 // ---------- Behavior 6: climate ----------
 function hvacAutoLevel(ambientC, targetC) {
   const level = Math.round(Math.abs(ambientC - targetC) / 5);
@@ -43,17 +71,22 @@ function deriveMode(d, state) {
       if (!incident.active) return 'RECORDING';
       if (incident.uploadSource === d.id) return incident.uploadProgress >= 100 ? 'UPLOADED' : 'UPLOADING';
       return 'EMERGENCY_LOCK';
+    case 'audio_sensor':
+      return sensors.siren.active ? 'SIREN_DETECTED' : 'LISTENING';
+    case 'bsd_radar':
+      return sensors.blindSpot[d.props.side] ? 'DETECTED' : 'CLEAR';
     case 'turn_signal':
-      if (sensors.turnSignal === 'left') return 'BLINKING_LEFT';
-      if (sensors.turnSignal === 'right') return 'BLINKING_RIGHT';
+      if (sensors.turnSignal === 'left') return 'ACTIVE_LEFT';
+      if (sensors.turnSignal === 'right') return 'ACTIVE_RIGHT';
       return 'IDLE';
     case 'mirror': {
       const side = d.props.side;
-      const detected = !!sensors.blindSpot[side];
-      if (detected && sensors.turnSignal === side && !turnSignalFaulted(state)) return 'FLASHING';
-      if (detected) return 'STEADY';
+      if (laneChangeConflict(state, side)) return 'FLASHING';
+      if (radarDetects(state, side)) return 'STEADY';
       return 'IDLE';
     }
+    case 'buzzer':
+      return buzzerDemanded(state) ? 'ALARM' : 'SILENT';
     case 'ecall':
       return incident.active ? incident.ecallState : 'STANDBY';
     case 'ecu':
@@ -78,25 +111,20 @@ function deriveMode(d, state) {
   }
 }
 
-function turnSignalFaulted(state) {
-  const ts = state.devices.find((d) => d.type === 'turn_signal');
-  return ts ? ts.fault : false;
-}
-
 // Behavior 2: audio is muted while any reason is present.
 function muteReasons(state) {
   const reasons = [];
-  if (state.sensors.siren.active) reasons.push('SIREN');
+  if (sirenDetected(state)) reasons.push('SIREN');
   if (state.incident.active) reasons.push('COLLISION');
   return reasons;
 }
 
-const EMERGENCY_MODES = new Set(['EMERGENCY_LOCK', 'UPLOADING', 'UPLOADED', 'COUNTDOWN', 'CALLING', 'CONNECTED', 'FLASHING', 'IMPACT_DETECTED', 'EMERGENCY', 'CRITICAL_RANGE']);
+const EMERGENCY_MODES = new Set(['EMERGENCY_LOCK', 'UPLOADING', 'UPLOADED', 'COUNTDOWN', 'CALLING', 'CONNECTED', 'FLASHING', 'ALARM', 'IMPACT_DETECTED', 'EMERGENCY', 'CRITICAL_RANGE']);
 // 'FAULT' here is the eCall *call* state (the call was interrupted), which outlives a repaired module.
-const WARNING_MODES = new Set(['STEADY', 'MUTED', 'LOW_RANGE_WARNING', 'WARNING', 'CANCELLED', 'FAULT']);
+const WARNING_MODES = new Set(['STEADY', 'DETECTED', 'SIREN_DETECTED', 'MUTED', 'LOW_RANGE_WARNING', 'WARNING', 'CANCELLED', 'FAULT']);
 // A device the user has switched off is idle: it is in STANDBY (proposal status set:
 // Normal, Warning, Emergency, Standby, Shed, Deferred, Fault).
-const STANDBY_MODES = new Set(['STANDBY', 'IDLE', 'OFF']);
+const STANDBY_MODES = new Set(['STANDBY', 'IDLE', 'SILENT', 'OFF']);
 const STATUSES = ['NORMAL', 'WARNING', 'EMERGENCY', 'STANDBY', 'SHED', 'DEFERRED', 'FAULT'];
 
 function deriveStatus(d) {
@@ -109,10 +137,32 @@ function deriveStatus(d) {
   return 'NORMAL';
 }
 
+// A zone reports the most severe status among its devices (an empty zone is on standby).
+const ZONE_SEVERITY = ['STANDBY', 'NORMAL', 'DEFERRED', 'SHED', 'WARNING', 'FAULT', 'EMERGENCY'];
+function deriveZoneStatus(devices) {
+  let worst = 'STANDBY';
+  for (const d of devices) if (ZONE_SEVERITY.indexOf(d.status) > ZONE_SEVERITY.indexOf(worst)) worst = d.status;
+  return worst;
+}
+
+// System level: an active collision raises the whole system to CRITICAL_EMERGENCY (Behavior 1).
+const SYSTEM_LEVELS = ['NORMAL', 'WARNING', 'CRITICAL', 'CRITICAL_EMERGENCY'];
+function deriveSystemLevel(state) {
+  if (state.incident.active) return 'CRITICAL_EMERGENCY';
+  if (state.alerts.some((a) => a.level === 'critical')) return 'CRITICAL';
+  if (state.alerts.some((a) => a.level === 'warning') || state.devices.some((d) => d.fault && d.priority === 0)) return 'WARNING';
+  return 'NORMAL';
+}
+
 // ---------- Behavior 4: stations ----------
+// The range reaches the system through the trip computer (ECU). Without a working one (faulted or
+// not configured) the range is unknown, so no station can be judged reachable.
+function ecuAvailable(state) {
+  return healthy(state, 'ecu');
+}
+
 function computeNavigation(state, stations, haversineKm) {
-  const ecu = state.devices.find((d) => d.type === 'ecu');
-  const ecuOk = ecu && !ecu.fault;
+  const ecuOk = ecuAvailable(state);
   const { rangeKm, position } = state.environment;
   const { reachableFactor, fuelLPerKm } = state.settings;
   const list = stations.map((s) => {
@@ -128,7 +178,7 @@ function computeNavigation(state, stations, haversineKm) {
   });
   list.sort((a, b) => a.distanceKm - b.distanceKm);
   const recommended = state.lowRange.active && ecuOk ? list.filter((s) => s.reachable) : [];
-  return { stations: list, recommended, targetId: state.navigation.targetId };
+  return { stations: list, recommended, targetId: state.navigation.targetId, reachableKm: Math.round(rangeKm * reachableFactor * 10) / 10 };
 }
 
 // ---------- alerts ----------
@@ -153,20 +203,20 @@ function computeAlerts(state, power) {
     alerts.push({ id: 'collision', priority: 1, level: 'critical', title: `${dir}撞擊事故（${incident.impactG} g）`, message });
   }
 
-  for (const m of byType('mirror')) {
-    if (m.mode === 'FLASHING') {
-      alerts.push({ id: `blindspot-${m.props.side}`, priority: 2, level: 'critical', title: `${SIDE_LABEL[m.props.side]}盲區有來車`, message: '請勿變換車道' });
+  for (const side of ['left', 'right']) {
+    if (laneChangeConflict(state, side)) {
+      alerts.push({ id: `blindspot-${side}`, priority: 2, level: 'critical', title: `${SIDE_LABEL[side]}盲區有來車`, message: '請勿變換車道' });
     }
   }
 
-  if (sensors.siren.active) {
+  if (sirenDetected(state)) {
     const dir = DIRECTION_LABEL[sensors.siren.direction] || '';
     alerts.push({ id: 'siren', priority: 3, level: 'warning', title: `${dir}有救護車，請注意避讓`, message: '娛樂音響已靜音' });
   }
 
-  const ecuFaulted = byType('ecu').some((d) => d.fault);
-  if (ecuFaulted) {
-    alerts.push({ id: 'range-unknown', priority: 4, level: 'warning', title: '里程資訊無法取得', message: '行車電腦故障' });
+  if (!ecuAvailable(state)) {
+    const configured = byType('ecu').length > 0;
+    alerts.push({ id: 'range-unknown', priority: 4, level: 'warning', title: '里程資訊無法取得', message: configured ? '行車電腦故障' : '未配置行車電腦' });
   } else if (state.lowRange.active) {
     const critical = state.environment.rangeKm <= state.settings.criticalRangeKm;
     const n = state.navigationView.recommended.length;
@@ -187,7 +237,7 @@ function computeAlerts(state, power) {
   } else if (power.status === 'OVERLOAD') {
     const deferred = state.devices.filter((d) => d.powerState === 'DEFERRED').map((d) => d.name);
     const affected = state.devices.filter((d) => d.powerReason === 'OVERLOAD' && d.powerState !== 'DEFERRED').map((d) => d.name);
-    const parts = [];
+    const parts = [`需求負載率 ${power.requestedPct}%（${power.requestedW} / ${power.capacityW} W）`];
     if (affected.length) parts.push(`已降載／卸載：${affected.join('、')}`);
     if (deferred.length) parts.push(`電力不足，已延後啟動：${deferred.join('、')}`);
     alerts.push({ id: 'power', priority: 5, level: 'warning', title: '電力超載，已啟動負載管理', message: parts.join('；') });
@@ -196,9 +246,24 @@ function computeAlerts(state, power) {
   }
 
   for (const d of state.devices) {
-    if (!d.fault || d.type === 'ecu') continue;
-    if (d.type === 'mirror') {
-      alerts.push({ id: `fault-${d.id}`, priority: 6, level: 'info', title: `${SIDE_LABEL[d.props.side]}盲區輔助失效`, message: `${d.name} 故障` });
+    if (!d.fault || (d.type === 'ecu' && !ecuAvailable(state))) continue; // range-unknown already covers it
+    const side = SIDE_LABEL[d.props.side] || '';
+    const sameSide = (x) => x.props.side === d.props.side;
+    // With a working spare of the same role (configured on the configuration page) the function
+    // keeps running, so only the faulted unit is reported.
+    const spare = { title: `${d.name} 故障`, message: '同類備援設備仍在運作' };
+    let a;
+    if (d.type === 'bsd_radar') {
+      a = healthy(state, 'bsd_radar', sameSide) ? spare : { title: `${side}盲區輔助失效`, message: `${d.name} 故障，無法偵測盲區來車` };
+    } else if (d.type === 'mirror') {
+      a = { title: `${side}後視鏡 LED 故障`, message: healthy(state, 'bsd_radar', sameSide) ? '盲區警示改由儀表與蜂鳴器提示' : `${d.name} 故障` };
+    } else if (d.type === 'audio_sensor') {
+      a = healthy(state, 'audio_sensor') ? spare : { title: '救護車笛聲偵測失效', message: `${d.name} 故障` };
+    } else if (d.type === 'buzzer') {
+      a = healthy(state, 'buzzer') ? spare : { title: `${d.name}故障`, message: '警示音無法發出，請留意儀表警示' };
+    }
+    if (a) {
+      alerts.push({ id: `fault-${d.id}`, priority: 6, level: 'info', ...a });
     } else if (d.type === 'ecall' && incident.active && incident.ecallState === 'FAULT') {
       // the collision alert already tells the driver to dial manually
     } else {
@@ -211,6 +276,7 @@ function computeAlerts(state, power) {
 }
 
 module.exports = {
-  hvacAutoLevel, applyClimate, deriveMode, deriveStatus, muteReasons,
-  computeNavigation, computeAlerts, DIRECTION_LABEL, ECALL_SERVICE_LABEL, STATUSES,
+  hvacAutoLevel, applyClimate, deriveMode, deriveStatus, deriveZoneStatus, deriveSystemLevel, muteReasons,
+  sirenDetected, radarDetects, turnSignalActive, laneChangeConflict, ecuAvailable,
+  computeNavigation, computeAlerts, DIRECTION_LABEL, ECALL_SERVICE_LABEL, STATUSES, SYSTEM_LEVELS,
 };

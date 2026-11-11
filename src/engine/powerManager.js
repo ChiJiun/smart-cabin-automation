@@ -86,6 +86,7 @@ function allocatePower(devices, { capacityW, highLoadPct, emergency }) {
   }
 
   const critical = demand > capacityW;
+  const pctOf = (w) => (capacityW > 0 ? Math.round((w / capacityW) * 1000) / 10 : null);
   const loadPct = capacityW > 0 ? (demand / capacityW) * 100 : Infinity;
   let status;
   if (critical) status = 'CRITICAL_POWER';
@@ -96,8 +97,11 @@ function allocatePower(devices, { capacityW, highLoadPct, emergency }) {
   return {
     capacityW,
     requestedW,
+    // Load ratio of the requested demand, before load management (the Behavior 5 trigger is > 100 %).
+    requestedPct: pctOf(requestedW),
     demandW: demand,
-    loadPct: Math.round(loadPct * 10) / 10,
+    // Load ratio actually supplied after load management.
+    loadPct: pctOf(demand),
     status,
     shedSteps,
   };

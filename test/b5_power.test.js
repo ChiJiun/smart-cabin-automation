@@ -3,9 +3,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { setup } = require('./helpers');
 
-test('B5: default state is NORMAL at 208 W / 1000 W', () => {
+test('B5: default state is NORMAL at 211 W / 1000 W', () => {
   const { s } = setup();
-  assert.equal(s().power.demandW, 208);
+  assert.equal(s().power.demandW, 211);
+  assert.equal(s().power.requestedPct, 21.1);
   assert.equal(s().power.status, 'NORMAL');
 });
 
@@ -15,9 +16,9 @@ test('B5: 80–100 % load -> HIGH_LOAD warning, nothing shed', () => {
   act('setDevice', { id: 'fridge', on: true });
   act('setDevice', { id: 'seat-driver', on: true, level: 3 });
   act('setDevice', { id: 'seat-passenger', on: true, level: 2 });
-  // 208 + 300 + 60 + 135 + 90 = 793 -> 79.3 %
+  // 211 + 300 + 60 + 135 + 90 = 796 -> 79.6 %
   assert.equal(s().power.status, 'NORMAL');
-  act('setDevice', { id: 'screen-rear-left', on: true }); // 823 -> 82.3 %
+  act('setDevice', { id: 'screen-rear-left', on: true }); // 826 -> 82.6 %
   assert.equal(s().power.status, 'HIGH_LOAD');
   assert.ok(s().alerts.some((a) => a.id === 'power' && /用電量偏高/.test(a.title)));
   assert.ok(s().devices.every((d) => d.powerState === 'NORMAL'));
@@ -26,9 +27,12 @@ test('B5: 80–100 % load -> HIGH_LOAD warning, nothing shed', () => {
 test('B5: winter overload scenario sheds P3 in order and keeps demand <= capacity', () => {
   const { e, s, dev } = setup();
   e.loadScenario('winter-overload');
-  assert.equal(s().power.requestedW, 1293);
-  assert.equal(s().power.demandW, 963);
+  assert.equal(s().power.requestedW, 1296);
+  assert.equal(s().power.requestedPct, 129.6); // trigger: load ratio > 100 %
+  assert.equal(s().power.demandW, 966);
+  assert.equal(s().power.loadPct, 96.6);
   assert.equal(s().power.status, 'OVERLOAD');
+  assert.match(s().alerts.find((a) => a.id === 'power').message, /需求負載率 129\.6%（1296 \/ 1000 W）/);
   for (const id of ['inverter', 'screen-rear-left', 'screen-rear-right']) assert.equal(dev(id).powerState, 'DEFERRED');
   assert.equal(dev('audio').powerState, 'SHED'); // was running before -> shed, not deferred
   assert.equal(dev('seat-rear').powerState, 'NORMAL');
@@ -53,10 +57,10 @@ test('B5: restoring capacity restores devices in reverse order', () => {
   act('setAlternatorFault', { fault: false });
   assert.equal(dev('hvac').effectiveLevel, 5);
   assert.equal(dev('seat-driver').powerState, 'NORMAL');
-  assert.equal(s().power.demandW, 963);
+  assert.equal(s().power.demandW, 966);
   act('setCapacity', { watts: 1300 });
   assert.ok(s().devices.every((d) => d.powerState === 'NORMAL'));
-  assert.equal(s().power.demandW, 1293);
+  assert.equal(s().power.demandW, 1296);
 });
 
 test('B5: P1/P2 seat heaters are reduced one level at a time (rear first)', () => {
@@ -64,9 +68,9 @@ test('B5: P1/P2 seat heaters are reduced one level at a time (rear first)', () =
   act('setDevice', { id: 'seat-rear', on: true, level: 3 });
   act('setDevice', { id: 'seat-driver', on: true, level: 3 });
   act('setDevice', { id: 'audio', on: false });
-  // 138 + 135 + 135 = 408
+  // 141 + 135 + 135 = 411
   act('setCapacity', { watts: 330 });
-  // need -78: rear 3->2 (-45) -> 363, rear 2->1 (-45) -> 318
+  // need -81: rear 3->2 (-45) -> 366, rear 2->1 (-45) -> 321
   assert.equal(dev('seat-rear').powerState, 'REDUCED');
   assert.equal(dev('seat-rear').effectiveLevel, 1);
   assert.equal(dev('seat-driver').effectiveLevel, 3);
@@ -76,14 +80,14 @@ test('B5: CRITICAL_POWER when P0 + P1 minimum exceeds capacity', () => {
   const { e, s } = setup();
   e.loadScenario('critical-power');
   assert.equal(s().power.status, 'CRITICAL_POWER');
-  assert.equal(s().power.demandW, 318);
+  assert.equal(s().power.demandW, 321);
   assert.ok(s().alerts.some((a) => a.title === '電力不足，僅維持安全設備'));
 });
 
 test('B5: a device turned on without headroom is DEFERRED and starts automatically later', () => {
   const { act, s, dev } = setup();
   act('setCapacity', { watts: 250 });
-  act('setDevice', { id: 'fridge', on: true }); // 263 > 250 -> fridge (first in order) deferred
+  act('setDevice', { id: 'fridge', on: true }); // 271 > 250 -> fridge (first in order) deferred
   assert.equal(dev('fridge').powerState, 'DEFERRED');
   assert.match(s().alerts.find((a) => a.id === 'power').message, /延後啟動：車用冰箱/);
   act('setCapacity', { watts: 300 });

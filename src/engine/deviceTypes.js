@@ -12,10 +12,13 @@
 const DEVICE_TYPES = {
   g_sensor: { label: '碰撞傳感器 (G-Sensor)', fixedPriority: 0, ratedW: 5, props: ['position'] },
   dashcam: { label: '行車記錄器 (Dashcam)', fixedPriority: 0, ratedW: 8, uploadW: 48, props: ['position'] },
+  audio_sensor: { label: '音訊傳感器（緊急車輛笛聲）', fixedPriority: 0, ratedW: 2 },
+  bsd_radar: { label: '盲區雷達 (BSD Radar)', fixedPriority: 0, ratedW: 3, props: ['side'] },
+  mirror: { label: '電子後視鏡（盲區 LED）', fixedPriority: 0, ratedW: 3, activeW: 7, props: ['side'] },
   turn_signal: { label: '方向燈控制模組', fixedPriority: 0, ratedW: 2, activeW: 40 },
+  buzzer: { label: '中控蜂鳴器', fixedPriority: 0, ratedW: 1, activeW: 3 },
   display: { label: '車載中控儀表', fixedPriority: 0, ratedW: 25 },
   ecall: { label: '緊急通報模組 (eCall)', fixedPriority: 0, ratedW: 3, activeW: 45 },
-  mirror: { label: '電子後視鏡 (盲區雷達/LED)', fixedPriority: 0, ratedW: 6, activeW: 10, props: ['side'] },
   ecu: { label: '行車電腦/里程感測 (ECU)', fixedPriority: 0, ratedW: 10 },
   hvac: {
     label: '空調系統 (HVAC)', defaultPriority: 1, ratedW: 60,
@@ -38,9 +41,8 @@ const DEVICE_TYPES = {
 const SAFETY_TYPES = Object.keys(DEVICE_TYPES).filter((t) => DEVICE_TYPES[t].fixedPriority === 0);
 
 function getType(type) {
-  const t = DEVICE_TYPES[type];
-  if (!t) throw new Error(`Unknown device type: ${type}`);
-  return t;
+  if (!Object.prototype.hasOwnProperty.call(DEVICE_TYPES, type)) throw new Error(`Unknown device type: ${type}`);
+  return DEVICE_TYPES[type];
 }
 
 /**
@@ -53,9 +55,11 @@ function drawFor(device, mode, level) {
     case 'dashcam':
       return mode === 'UPLOADING' ? t.uploadW : device.ratedW;
     case 'turn_signal':
-      return mode.startsWith('BLINKING') ? t.activeW : device.ratedW;
+      return mode.startsWith('ACTIVE') ? t.activeW : device.ratedW;
     case 'mirror':
       return mode === 'FLASHING' ? t.activeW : device.ratedW;
+    case 'buzzer':
+      return mode === 'ALARM' ? t.activeW : device.ratedW;
     case 'ecall':
       return mode === 'CALLING' || mode === 'CONNECTED' ? t.activeW : device.ratedW;
     case 'hvac':

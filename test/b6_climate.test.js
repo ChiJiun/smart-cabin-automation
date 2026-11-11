@@ -21,7 +21,7 @@ test('B6: temperature changes HVAC level/mode and power', () => {
   act('setAmbient', { celsius: -6 });
   assert.equal(dev('hvac').mode, 'HEATING');
   assert.equal(dev('hvac').drawW, 300);
-  assert.equal(s().power.demandW, 78 + 300 + 180 + 70); // P0 78 W + HVAC 5 檔 + 除霧 + 音響
+  assert.equal(s().power.demandW, 81 + 300 + 180 + 70); // P0 81 W + HVAC 5 檔 + 除霧 + 音響
 });
 
 test('B6: defroster auto on at <= 3 °C, off only above 5 °C', () => {
@@ -93,4 +93,27 @@ test('B6: a faulted HVAC does not follow the climate rule and logs no automatic 
   act('setFault', { id: 'hvac', fault: false });
   assert.equal(dev('hvac').level, 5);
   assert.ok(s().log.slice(mark2).some((l) => /自動依溫差調節 1 → 5 檔/.test(l.message)));
+});
+
+test('B6: a repaired auto defroster catches up with the rule and logs it', () => {
+  const { act, s, dev } = setup();
+  act('setFault', { id: 'defroster', fault: true });
+  act('setAmbient', { celsius: 0 });
+  assert.equal(dev('defroster').on, false);
+  assert.equal(dev('defroster').drawW, 0);
+  const mark = s().log.length;
+  act('setFault', { id: 'defroster', fault: false });
+  assert.equal(dev('defroster').on, true);
+  assert.equal(dev('defroster').drawW, 180);
+  assert.ok(s().log.slice(mark).some((l) => l.kind === 'rule' && /車外 0 °C ≤ 3 °C：自動開啟後擋風除霧/.test(l.message)));
+});
+
+test('B6: switching the defroster back to auto inside the hysteresis band logs the band, not a false inequality', () => {
+  const { act, s } = setup();
+  act('setAmbient', { celsius: 0 });
+  act('setAmbient', { celsius: 4 });
+  act('setDevice', { id: 'defroster', on: false }); // manual override
+  act('setDevice', { id: 'defroster', auto: true });
+  const rule = s().log.filter((l) => l.kind === 'rule').at(-1).message;
+  assert.equal(rule, '車外 4 °C 在遲滯區間（> 5 °C 才關閉）：自動開啟後擋風除霧');
 });
