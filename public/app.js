@@ -162,24 +162,25 @@ function toast(msg) {
 
 function connect() {
   const es = new EventSource('/api/stream');
-  es.onmessage = (e) => render(JSON.parse(e.data));
+  es.onmessage = (e) => render(JSON.parse(e.data), true);
   es.onerror = () => { es.close(); setTimeout(connect, 2000); };
 }
 
 // ------------------------------------------------------------------ render
 // Revision of the newest state received. A POST response can arrive after a newer SSE update (an
 // action and a clock tick close together); the older state is then ignored, and the current one is
-// drawn again instead, so a forced console sync still applies. A new bootId (server restarted)
-// starts the count again.
+// drawn again instead, so a forced console sync still applies. Only the SSE stream switches to a new
+// bootId (server restarted); a POST response from another server run is treated as stale.
 let lastBoot = null;
 let lastRev = -1;
-function isStale(s) {
-  if (!s || s.bootId !== lastBoot) return false;
+function isStale(s, fromStream) {
+  if (!s) return false;
+  if (s.bootId !== lastBoot) return !fromStream && lastBoot !== null;
   return s.rev < lastRev;
 }
 
-function render(s) {
-  if (state && isStale(s)) s = state;
+function render(s, fromStream = false) {
+  if (state && isStale(s, fromStream)) s = state;
   lastBoot = s.bootId;
   lastRev = s.rev;
   state = s;

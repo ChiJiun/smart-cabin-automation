@@ -354,3 +354,25 @@ test('B1: a faulted eCall module at impact time also sounds the buzzer until ack
   assert.equal(s().incident.faultAcknowledged, false);
   assert.equal(s().buzzer, true);
 });
+
+test('B1: removing the eCall module during the countdown is logged as removed, not as a fault', () => {
+  const { e, act, s } = setup();
+  act('impact', { g: 6 });
+  e.deleteDevice('ecall');
+  assert.equal(s().incident.ecallState, 'FAULT');
+  assert.ok(s().log.some((l) => l.message === 'eCall 模組已移除，自動通報中斷：請手動撥打 119（救護）或 110（警政）'));
+  assert.equal(s().buzzer, true);
+});
+
+test('B1: an eCall module removed after the call was cancelled or connected is still reported', () => {
+  for (const finish of ['cancelEcall', 'selectEcall']) {
+    const { e, act, s } = setup();
+    act('impact', { g: 6 });
+    act(finish, { service: '119' });
+    e.deleteDevice('ecall');
+    assert.notEqual(s().incident.ecallState, 'FAULT', finish);
+    const a = s().alerts.find((x) => x.id === 'missing-ecall');
+    assert.ok(a, `${finish}: the driver is told the eCall module is gone`);
+    assert.equal(a.title, '緊急通報無法使用');
+  }
+});

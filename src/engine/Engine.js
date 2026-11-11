@@ -300,7 +300,8 @@ class Engine extends EventEmitter {
     if ((inc.ecallState === 'COUNTDOWN' || inc.ecallState === 'CALLING') && this._ecallFaulted()) {
       inc.ecallState = 'FAULT';
       inc.ecallRemainingS = 0;
-      this._log('rule', 'eCall 模組故障，自動通報中斷：請手動撥打 119（救護）或 110（警政）');
+      const present = this.state.devices.some((d) => d.type === 'ecall');
+      this._log('rule', `${present ? 'eCall 模組故障' : 'eCall 模組已移除'}，自動通報中斷：請手動撥打 119（救護）或 110（警政）`);
     }
     if (inc.uploadProgress < 100 && !inc.uploadDone) {
       const src = inc.uploadSource ? this.state.devices.find((d) => d.id === inc.uploadSource) : null;
@@ -871,7 +872,7 @@ const SCENARIOS = {
   },
   collision: {
     label: '前方撞擊（6.0 g）',
-    description: '一般行駛中發生 6.0 g 前方撞擊，音響與後座螢幕運作中 → 前記錄器優先上傳',
+    description: '一般行駛中發生 6.0 g 前方撞擊，音響與左後座螢幕運作中 → 前記錄器優先上傳',
     actions: [
       { type: 'setDevice', id: 'screen-rear-left', on: true },
       { type: 'impact', g: 6, direction: 'front' },

@@ -29,6 +29,7 @@ jobs:
       - name: Smoke test npm start
         shell: bash
         run: |
+          trap 'echo "--- server.log ---"; cat server.log' EXIT
           npm start > server.log 2>&1 &
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3000/api/state > /dev/null; then break; fi
@@ -37,4 +38,3 @@ jobs:
           curl -fsS http://127.0.0.1:3000/ | grep -q '<title>'
           curl -fsS http://127.0.0.1:3000/config.html | grep -q '<title>'
           curl -fsS http://127.0.0.1:3000/api/state | grep -q '"systemLevel":"NORMAL"'
-          cat server.log

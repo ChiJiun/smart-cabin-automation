@@ -285,13 +285,13 @@ test('a removed safety device is reported like a faulted one and raises the syst
   }
 });
 
-test('a collision sensor without a position covers both sides; the dashcam alert needs every dashcam gone', () => {
+test('a front collision sensor restores only the front check; the dashcam alert needs every dashcam gone', () => {
   const { e, s } = setup();
   e.deleteDevice('g-sensor');
   e.deleteDevice('g-sensor-rear');
   assert.ok(s().alerts.some((a) => a.id === 'missing-g_sensor-front'));
   assert.ok(s().alerts.some((a) => a.id === 'missing-g_sensor-rear'));
-  e.addDevice({ id: 'g-any', type: 'g_sensor', name: '全向碰撞傳感器', zone: 'front', props: { position: 'front' } });
+  e.addDevice({ id: 'g-front2', type: 'g_sensor', name: '前方碰撞傳感器（新）', zone: 'front', props: { position: 'front' } });
   assert.ok(!s().alerts.some((a) => a.id === 'missing-g_sensor-front'));
   assert.ok(s().alerts.some((a) => a.id === 'missing-g_sensor-rear'));
   e.deleteDevice('dashcam-front');
@@ -337,4 +337,35 @@ test('npm test runs every test file (the script lists them, as Node 20 on Window
   const files = fs.readdirSync(path.join(__dirname)).filter((f) => f.endsWith('.test.js'));
   for (const f of files) assert.ok(script.split(' ').includes(`test/${f}`), `${f} is missing from the npm test script`);
   assert.ok(!/[*?]/.test(script), 'no glob in the script');
+});
+
+test('a removed mirror only says the dashboard takes over while a working radar on that side remains', () => {
+  const { e, act, s } = setup();
+  e.deleteDevice('mirror-left');
+  const msg = () => s().alerts.find((a) => a.id === 'missing-mirror-left').message;
+  assert.equal(msg(), '未配置左側電子後視鏡，盲區警示改由儀表與蜂鳴器提示');
+  act('setFault', { id: 'radar-left', fault: true });
+  assert.equal(msg(), '未配置左側電子後視鏡');
+  act('setFault', { id: 'radar-left', fault: false });
+  e.deleteDevice('radar-left');
+  assert.equal(msg(), '未配置左側電子後視鏡');
+});
+
+test('within one priority the more severe alert is shown first', () => {
+  // a missing safety device (warning) before a device fault (info)
+  const a = setup();
+  a.act('setFault', { id: 'audio-sensor', fault: true });
+  a.e.deleteDevice('radar-left');
+  assert.equal(a.s().mainAlert.id, 'missing-bsd_radar-left');
+  assert.equal(a.s().mainAlert.level, 'warning');
+  assert.equal(a.dev('display').mode, 'WARNING');
+  // a critical power shortage before the alternator warning
+  const b = setup();
+  b.e.updateSettings({ batteryW: 150 }); // the battery alone cannot carry P0 + the P1 minimum
+  b.act('setAmbient', { celsius: -6 });
+  b.act('setAlternatorFault', { fault: true });
+  assert.equal(b.s().power.status, 'CRITICAL_POWER');
+  assert.equal(b.s().mainAlert.id, 'power');
+  assert.equal(b.s().mainAlert.level, 'critical');
+  assert.ok(b.s().alerts.some((x) => x.id === 'alternator'));
 });

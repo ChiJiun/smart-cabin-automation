@@ -210,7 +210,8 @@ const MISSING_CHECKS = [
       id: `mirror-${side}`,
       missing: (s) => !covers(s, 'mirror', (d) => d.props.side === side),
       title: `${SIDE_LABEL[side]}後視鏡 LED 無法警示`,
-      message: `未配置${SIDE_LABEL[side]}電子後視鏡，盲區警示改由儀表與蜂鳴器提示`,
+      // The dashboard and buzzer only take over while a working radar on that side still detects.
+      message: (s) => `未配置${SIDE_LABEL[side]}電子後視鏡${healthy(s, 'bsd_radar', (d) => d.props.side === side) ? '，盲區警示改由儀表與蜂鳴器提示' : ''}`,
     },
   ]),
   { id: 'turn_signal', missing: (s) => !covers(s, 'turn_signal'), title: '方向燈訊號無法取得', message: '未配置方向燈控制模組，變換車道時的盲區警示無法運作' },
@@ -223,6 +224,7 @@ function missingSafetyFunctions(state) {
 }
 
 // ---------- alerts ----------
+const LEVEL_RANK = { critical: 0, warning: 1, info: 2 };
 // Priority: 1 Collision > 2 Blind spot > 3 Siren > 4 Low range > 5 Power > 6 Device faults
 function computeAlerts(state, power) {
   const alerts = [];
@@ -313,12 +315,15 @@ function computeAlerts(state, power) {
   }
 
   for (const c of missingSafetyFunctions(state)) {
-    // During an incident without an eCall module the collision alert already says to dial manually.
-    if (c.id === 'ecall' && incident.active) continue;
-    alerts.push({ id: `missing-${c.id}`, priority: 6, level: 'warning', title: c.title, message: c.message });
+    // While the call is interrupted (FAULT) the collision alert already says to dial manually.
+    if (c.id === 'ecall' && incident.active && incident.ecallState === 'FAULT') continue;
+    const message = typeof c.message === 'function' ? c.message(state) : c.message;
+    alerts.push({ id: `missing-${c.id}`, priority: 6, level: 'warning', title: c.title, message });
   }
 
-  alerts.sort((a, b) => a.priority - b.priority);
+  // Within one priority the more severe alert comes first (e.g. a critical power shortage before the
+  // alternator warning, a missing safety device before a device fault); the sort is stable otherwise.
+  alerts.sort((a, b) => a.priority - b.priority || LEVEL_RANK[a.level] - LEVEL_RANK[b.level]);
   return alerts;
 }
 
