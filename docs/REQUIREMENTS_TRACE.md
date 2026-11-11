@@ -27,6 +27,7 @@
 | P0–P3 階梯式自動降載、延後啟動與恢復 | 見行為 5 | 見行為 5 | 電力預算「負載管理決策」 |
 | 六大重大行為 | 見第 4 節 | b1–b6 | 見第 4 節 |
 | TA 模擬測試控制台、確定性模擬時鐘（可單步／暫停）、一鍵重置 | `Engine.js`：`tick`、`actions.clock`、`reset`、`factoryReset`；`server.js` 每秒推進一次 | system：reset restores…、reproducibility… | 頁首「暫停」「+1 秒」「+5 秒」「+10 秒」；操作台「重置狀態」「恢復原廠配置」 |
+| （設計補充）安全設備被刪除時，比照故障提示並升為 WARNING | `rules.js`：`missingSafetyFunctions`、`computeAlerts` | system：a removed safety device is reported like a faulted one…、a collision sensor without a position covers both sides… | 刪除設備後儀表的黃色「未配置」提示（TA_GUIDE 系統功能「缺少安全設備」） |
 | Out of Scope：影片編碼與電信撥號以模擬進度條與視窗呈現 | `app.js`：`renderCockpit`（上傳進度條）、`renderEcallWindow`（模擬通話視窗） | b1：eCall counts down 10 s… | 撞擊後的進度條與左下角「eCall 緊急通報」視窗 |
 
 七種狀態的觸發方式：
@@ -54,6 +55,7 @@
 | 10 秒 eCall 倒數，可選擇撥打 119 或 110，可取消誤觸 | `Engine.js`：`actions.selectEcall`、`actions.cancelEcall`、`_advanceIncident` | b1：the driver can choose 119 or 110…、driver can cancel eCall… | eCall 通話視窗的三個按鈕 |
 | 倒數結束轉為 CONNECTED 並發送座標與撞擊方向 | `Engine.js`：`_startCall`、`_connectCall` | b1：eCall counts down 10 s, then CONNECTED… | 通話視窗列出 GPS 座標、撞擊方向、衝擊值 |
 | 緊急電力保留，強制關閉 P2、P3 設備與音響 | `powerManager.js`：`allocatePower`（`emergency`） | b1：impact >= 4.0 g starts the incident chain、the audio is forced off… | 「負載管理決策」原因為「緊急電力保留」 |
+| （設計補充）eCall 無法自動通報時，蜂鳴器鳴響到駕駛確認 | `rules.js`：`buzzerDemanded`；`Engine.js`：`actions.ackEcallFault` | b1：an interrupted eCall sounds the buzzer…、without an eCall module…、a faulted eCall module at impact time… | 通話視窗「我知道了，我會自行撥打（停止蜂鳴器）」 |
 
 ### 行為 2：後方救護車避讓提示
 
@@ -95,7 +97,7 @@
 | (4) P0 永不卸載 | `powerManager.js`：候選只含 P1 以上 | b5：CRITICAL_POWER when P0 + P1 minimum exceeds capacity | 載入「電力危急」 |
 | 容量回升依反向順序自動恢復或解除 DEFERRED | 每次重新由需求狀態分配電力 | b5：restoring capacity restores devices in reverse order、a device turned on without headroom is DEFERRED… | 按「發電機故障中（點擊恢復）」；逐步調回「發電機容量」看反向順序（TA_GUIDE 行為 5 第 6 步） |
 
-P3 內部順序：提案第 (1) 步點名「逆變器插座與音響」。內建配置另有車用冰箱與兩台後座螢幕，目前 P3 卸載順序為冰箱、逆變器、左螢幕、右螢幕、音響。只需要卸載部分 P3 時，會先關冰箱。這一點列為待使用者決定的事項。
+P3 內部順序：提案第 (1) 步點名「逆變器插座與音響」。內建配置另有車用冰箱與兩台後座螢幕，目前 P3 卸載順序為冰箱、逆變器、左螢幕、右螢幕、音響。只需要卸載部分 P3 時，會先關冰箱。提案點名的逆變器插座與音響都屬於第一階段，冰箱是內建配置額外加入的 P3 設備，所以排在最前；順序可在配置頁的「卸載順序」欄位調整。
 
 ### 行為 6：車外溫度與座艙舒適度連動
 
@@ -114,4 +116,4 @@ P3 內部順序：提案第 (1) 步點名「逆變器插座與音響」。內建
 | 純 JavaScript 狀態機與規則引擎 | `src/engine/` | b1–b6 |
 | HTML5／CSS／JavaScript，REST ＋ Server-Sent Events | `public/`、`server.js`：`/api/actions`、`/api/stream` | system：HTTP API… |
 | 資料以內建 JSON 檔初始化 | `src/config/defaultVehicle.json`、`src/config/stations.json` | system：reset restores…（從 JSON 重載） |
-| `node:test` 針對六大行為進行可重現的自動化測試 | `test/b1`–`b6`、`test/system.test.js` | system：reproducibility… |
+| `node:test` 針對六大行為進行可重現的自動化測試 | `test/b1`–`b6`、`test/system.test.js`；`npm test` 逐一列出測試檔（Node 20 在 Windows 不展開萬用字元）；GitHub Actions（`.github/workflows/ci.yml`）在 Windows 與 Linux 上以 Node 20／22／24 執行測試並啟動伺服器 | system：reproducibility…、npm test runs every test file… |
