@@ -1,6 +1,7 @@
 'use strict';
 
 const { EventEmitter } = require('events');
+const { randomUUID } = require('crypto');
 const { DEVICE_TYPES, getType } = require('./deviceTypes');
 const { allocatePower } = require('./powerManager');
 const rules = require('./rules');
@@ -73,6 +74,9 @@ const SETTING_RANGES = {
 class Engine extends EventEmitter {
   constructor() {
     super();
+    // Identifies this server run: a dashboard that reconnects after a restart accepts the new
+    // (lower) state revisions instead of treating them as stale.
+    this._bootId = randomUUID();
     this.config = {
       settings: clone(defaults.DEFAULT_SETTINGS),
       zones: clone(defaults.DEFAULT_ZONES),
@@ -119,6 +123,7 @@ class Engine extends EventEmitter {
     return {
       id: null, active: false, direction: null, impactG: null, startedAt: null,
       ecallState: 'STANDBY', ecallService: null, ecallRemainingS: null, callStartedAt: null, connectedAt: null,
+      faultAcknowledged: false,
       uploadSource: null, uploadProgress: 0, uploadDone: false,
     };
   }
@@ -190,6 +195,9 @@ class Engine extends EventEmitter {
     }
     s.zoneStatus = Object.fromEntries(this.config.zones.map((z) => [z.id, rules.deriveZoneStatus(s.devices.filter((d) => d.zone === z.id))]));
     this._logChanges();
+    // Every evaluation gets a new revision, so a dashboard can tell an older state (a slow POST
+    // response) from a newer one it already received over SSE.
+    this._rev = (this._rev || 0) + 1;
     this.emit('change');
   }
 
@@ -292,7 +300,8 @@ class Engine extends EventEmitter {
     if ((inc.ecallState === 'COUNTDOWN' || inc.ecallState === 'CALLING') && this._ecallFaulted()) {
       inc.ecallState = 'FAULT';
       inc.ecallRemainingS = 0;
-      this._log('rule', 'eCall 模組故障，自動通報中斷：請手動撥打 119（救護）或 110（警政）');
+      const present = this.state.devices.some((d) => d.type === 'ecall');
+      this._log('rule', `${present ? 'eCall 模組故障' : 'eCall 模組已移除'}，自動通報中斷：請手動撥打 119（救護）或 110（警政）`);
     }
     if (inc.uploadProgress < 100 && !inc.uploadDone) {
       const src = inc.uploadSource ? this.state.devices.find((d) => d.id === inc.uploadSource) : null;
@@ -415,6 +424,7 @@ class Engine extends EventEmitter {
           impactG: g,
           startedAt: this.state.simTime,
           ecallState: this._ecallFaulted() ? 'FAULT' : 'COUNTDOWN',
+          faultAcknowledged: false,
           ecallService: null,
           ecallRemainingS: st.ecallCountdownS,
           callStartedAt: null,
@@ -429,7 +439,9 @@ class Engine extends EventEmitter {
         if (source && source.props.position !== direction) this._log('rule', `${dirLabel}記錄器無法使用，改由「${source.name}」上傳影像`);
         if (!source) this._log('rule', '沒有可用的行車記錄器，無法上傳影像');
         this._log('rule', '緊急電力保留：卸載所有 P2／P3 設備與音響');
-        if (inc.ecallState === 'COUNTDOWN' && st.ecallCountdownS <= 0) {
+        if (inc.ecallState === 'FAULT') {
+          this._log('rule', `${this.state.devices.some((d) => d.type === 'ecall') ? 'eCall 模組故障' : '未配置 eCall 模組'}，無法自動通報：請手動撥打 119（救護）或 110（警政）`);
+        } else if (inc.ecallState === 'COUNTDOWN' && st.ecallCountdownS <= 0) {
           inc.ecallService = 'both';
           this._log('rule', `eCall 倒數設為 0 秒：立即撥打 ${rules.ECALL_SERVICE_LABEL.both}`);
           this._startCall();
@@ -455,6 +467,13 @@ class Engine extends EventEmitter {
         assert(inc.ecallState === 'COUNTDOWN', '只有在倒數期間可以取消通報');
         inc.ecallState = 'CANCELLED';
         this._log('event', '駕駛按下「我沒事，取消通報」');
+      },
+      ackEcallFault() {
+        const inc = this.state.incident;
+        assert(inc.active && inc.ecallState === 'FAULT', '目前沒有中斷的 eCall 通報');
+        assert(!inc.faultAcknowledged, '已確認過 eCall 故障');
+        inc.faultAcknowledged = true;
+        this._log('event', '駕駛確認 eCall 故障，將自行撥打 119 或 110（蜂鳴器停止）');
       },
       clearIncident() {
         assert(this.state.incident.active, '目前沒有事故');
@@ -785,6 +804,8 @@ class Engine extends EventEmitter {
   publicState() {
     const s = this.state;
     return {
+      bootId: this._bootId,
+      rev: this._rev || 0,
       simTime: s.simTime,
       clockRunning: s.clockRunning,
       settings: s.settings,
@@ -851,7 +872,7 @@ const SCENARIOS = {
   },
   collision: {
     label: '前方撞擊（6.0 g）',
-    description: '一般行駛中發生 6.0 g 前方撞擊，音響與後座螢幕運作中 → 前記錄器優先上傳',
+    description: '一般行駛中發生 6.0 g 前方撞擊，音響與左後座螢幕運作中 → 前記錄器優先上傳',
     actions: [
       { type: 'setDevice', id: 'screen-rear-left', on: true },
       { type: 'impact', g: 6, direction: 'front' },

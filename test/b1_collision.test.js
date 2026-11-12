@@ -300,3 +300,79 @@ test('B1: the buzzer sounds while the eCall countdown waits for the driver, then
   assert.equal(s().buzzer, false);
   assert.equal(s().systemLevel, 'CRITICAL_EMERGENCY'); // the incident itself is still active
 });
+
+test('B1: an interrupted eCall sounds the buzzer until the driver acknowledges it', () => {
+  const { e, act, s, dev } = setup();
+  act('impact', { g: 6 });
+  e.tick(2);
+  act('setFault', { id: 'ecall', fault: true });
+  assert.equal(s().incident.ecallState, 'FAULT');
+  assert.equal(s().buzzer, true, 'the driver must notice that the call was not made');
+  assert.equal(dev('buzzer').mode, 'ALARM');
+  e.tick(20);
+  assert.equal(s().buzzer, true, 'keeps sounding until acknowledged');
+  assert.throws(() => act('selectEcall', { service: '119' }), /自動通報已中斷/);
+  act('ackEcallFault');
+  assert.equal(s().incident.faultAcknowledged, true);
+  assert.equal(s().buzzer, false);
+  assert.equal(s().incident.ecallState, 'FAULT', 'the call stays interrupted');
+  assert.match(s().mainAlert.message, /請手動撥打/);
+  assert.match(s().log.find((l) => /駕駛確認 eCall 故障/.test(l.message)).message, /蜂鳴器停止/);
+  assert.throws(() => act('ackEcallFault'), /已確認過/);
+  act('clearIncident');
+  assert.equal(s().incident.faultAcknowledged, false);
+  assert.throws(() => act('ackEcallFault'), /沒有中斷的 eCall 通報/);
+});
+
+test('B1: without an eCall module the impact goes straight to FAULT, logs why and sounds the buzzer', () => {
+  const { e, act, s } = setup();
+  e.deleteDevice('ecall');
+  act('impact', { g: 6 });
+  assert.equal(s().incident.ecallState, 'FAULT');
+  assert.ok(s().log.some((l) => l.message === '未配置 eCall 模組，無法自動通報：請手動撥打 119（救護）或 110（警政）'));
+  assert.equal(s().buzzer, true);
+  assert.ok(!s().alerts.some((a) => a.id === 'missing-ecall'), 'the collision alert already says to dial manually');
+  act('ackEcallFault');
+  assert.equal(s().buzzer, false);
+  // once the incident is cleared the missing module is reported as a configuration problem
+  act('clearIncident');
+  assert.ok(s().alerts.some((a) => a.id === 'missing-ecall'));
+});
+
+test('B1: a faulted eCall module at impact time also sounds the buzzer until acknowledged', () => {
+  const { act, s } = setup();
+  act('setFault', { id: 'ecall', fault: true });
+  act('impact', { g: 6, direction: 'rear' });
+  assert.equal(s().incident.ecallState, 'FAULT');
+  assert.ok(s().log.some((l) => l.message === 'eCall 模組故障，無法自動通報：請手動撥打 119（救護）或 110（警政）'));
+  assert.equal(s().buzzer, true);
+  act('ackEcallFault');
+  assert.equal(s().buzzer, false);
+  // a new incident starts unacknowledged again
+  act('clearIncident');
+  act('impact', { g: 6 });
+  assert.equal(s().incident.faultAcknowledged, false);
+  assert.equal(s().buzzer, true);
+});
+
+test('B1: removing the eCall module during the countdown is logged as removed, not as a fault', () => {
+  const { e, act, s } = setup();
+  act('impact', { g: 6 });
+  e.deleteDevice('ecall');
+  assert.equal(s().incident.ecallState, 'FAULT');
+  assert.ok(s().log.some((l) => l.message === 'eCall 模組已移除，自動通報中斷：請手動撥打 119（救護）或 110（警政）'));
+  assert.equal(s().buzzer, true);
+});
+
+test('B1: an eCall module removed after the call was cancelled or connected is still reported', () => {
+  for (const finish of ['cancelEcall', 'selectEcall']) {
+    const { e, act, s } = setup();
+    act('impact', { g: 6 });
+    act(finish, { service: '119' });
+    e.deleteDevice('ecall');
+    assert.notEqual(s().incident.ecallState, 'FAULT', finish);
+    const a = s().alerts.find((x) => x.id === 'missing-ecall');
+    assert.ok(a, `${finish}: the driver is told the eCall module is gone`);
+    assert.equal(a.title, '緊急通報無法使用');
+  }
+});

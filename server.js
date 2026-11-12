@@ -41,7 +41,12 @@ function createApp(engine = new Engine()) {
 
   // ---- log export (TA reproducibility checks): full retained log as JSON or CSV
   app.get('/api/log', (req, res) => {
-    if (req.query.format === 'csv') {
+    const { format = 'json' } = req.query;
+    if (format !== 'json' && format !== 'csv') {
+      res.status(400).json({ error: 'format 必須是 json 或 csv' });
+      return;
+    }
+    if (format === 'csv') {
       res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="smart-cabin-log.csv"' });
       res.send(engine.exportLogCsv());
     } else {
@@ -78,12 +83,22 @@ if (require.main === module) {
   const engine = new Engine();
   const app = createApp(engine);
   const port = Number(process.env.PORT) || 3000;
+  // The API has no authentication, so by default only this computer can reach it. Set HOST=0.0.0.0
+  // to open the dashboard from another device on the network (e.g. a phone during a demo).
+  const host = process.env.HOST || '127.0.0.1';
   // Real-time simulation clock: one simulated second per real second while running.
   setInterval(() => { if (engine.state.clockRunning) engine.tick(1); }, 1000);
-  app.listen(port, () => {
-    console.log(`Smart Cabin simulation running at http://localhost:${port}`);
-    console.log(`  Dashboard + TA console : http://localhost:${port}/`);
-    console.log(`  Configuration          : http://localhost:${port}/config.html`);
+  const server = app.listen(port, host, () => {
+    const shown = host === '0.0.0.0' || host === '::' ? 'localhost' : host.includes(':') ? `[${host}]` : host;
+    console.log(`Smart Cabin simulation running at http://${shown}:${port} (listening on ${host})`);
+    console.log(`  Dashboard + TA console : http://${shown}:${port}/`);
+    console.log(`  Configuration          : http://${shown}:${port}/config.html`);
+    if (shown === 'localhost') console.log('  Other devices on the network can connect through the IP address of this computer (no authentication).');
+  });
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') console.error(`Port ${port} is already in use. Start with another port, e.g. PORT=8080 npm start`);
+    else console.error(err.message);
+    process.exit(1);
   });
 }
 

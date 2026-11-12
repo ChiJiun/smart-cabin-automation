@@ -162,12 +162,27 @@ function toast(msg) {
 
 function connect() {
   const es = new EventSource('/api/stream');
-  es.onmessage = (e) => render(JSON.parse(e.data));
+  es.onmessage = (e) => render(JSON.parse(e.data), true);
   es.onerror = () => { es.close(); setTimeout(connect, 2000); };
 }
 
 // ------------------------------------------------------------------ render
-function render(s) {
+// Revision of the newest state received. A POST response can arrive after a newer SSE update (an
+// action and a clock tick close together); the older state is then ignored, and the current one is
+// drawn again instead, so a forced console sync still applies. Only the SSE stream switches to a new
+// bootId (server restarted); a POST response from another server run is treated as stale.
+let lastBoot = null;
+let lastRev = -1;
+function isStale(s, fromStream) {
+  if (!s) return false;
+  if (s.bootId !== lastBoot) return !fromStream && lastBoot !== null;
+  return s.rev < lastRev;
+}
+
+function render(s, fromStream = false) {
+  if (state && isStale(s, fromStream)) s = state;
+  lastBoot = s.bootId;
+  lastRev = s.rev;
   state = s;
   renderHeader(s);
   renderCockpit(s);
@@ -349,7 +364,7 @@ let ecallRenderedKey = null;
 let ecallMinimisedKey = null;
 
 // The engine numbers every incident: a scenario resets the clock, so startedAt is not unique.
-function ecallKey(inc) { return `${inc.id}|${inc.ecallState}`; }
+function ecallKey(inc) { return `${inc.id}|${inc.ecallState}|${inc.faultAcknowledged ? 1 : 0}`; }
 let ecallFocusedId = null;
 
 function renderEcallWindow(s) {
@@ -421,7 +436,10 @@ function ecallWindowHtml(s) {
       break;
     case 'FAULT':
       body = `<div class="cw-status crit" aria-live="assertive">⚠ eCall 模組故障，自動通報已中斷</div>
-        <p>請手動撥打 119（救護）或 110（警政）。</p>`;
+        <p>請手動撥打 119（救護）或 110（警政）。</p>
+        ${inc.faultAcknowledged
+          ? '<p class="hint">已確認，蜂鳴器已停止。</p><button class="btn" data-ecall-window="min">關閉視窗</button>'
+          : '<button class="btn danger" data-act="ackEcallFault">我知道了，我會自行撥打（停止蜂鳴器）</button>'}`;
       break;
     case 'CANCELLED':
       body = `<div class="cw-status" aria-live="polite">駕駛已取消通報</div>
@@ -689,6 +707,7 @@ document.addEventListener('click', (e) => {
     }
     case 'selectEcall': return act({ type: 'selectEcall', service: b.dataset.service });
     case 'cancelEcall': return act({ type: 'cancelEcall' });
+    case 'ackEcallFault': return act({ type: 'ackEcallFault' });
     case 'clearIncident': return act({ type: 'clearIncident' });
     case 'sirenOn': return act({ type: 'siren', active: true, direction: $('#sirenDir').value });
     case 'sirenOff': return act({ type: 'siren', active: false });

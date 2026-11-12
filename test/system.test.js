@@ -248,3 +248,124 @@ test('HTTP API: malformed JSON is answered with a JSON error', async () => {
     server.close();
   }
 });
+
+test('a removed safety device is reported like a faulted one and raises the system level to WARNING', () => {
+  const cases = [
+    ['g-sensor', 'missing-g_sensor-front', '前方撞擊偵測失效'],
+    ['g-sensor-rear', 'missing-g_sensor-rear', '後方撞擊偵測失效'],
+    ['ecall', 'missing-ecall', '緊急通報無法使用'],
+    ['audio-sensor', 'missing-audio_sensor', '救護車笛聲偵測失效'],
+    ['radar-left', 'missing-bsd_radar-left', '左側盲區輔助失效'],
+    ['radar-right', 'missing-bsd_radar-right', '右側盲區輔助失效'],
+    ['mirror-left', 'missing-mirror-left', '左側後視鏡 LED 無法警示'],
+    ['mirror-right', 'missing-mirror-right', '右側後視鏡 LED 無法警示'],
+    ['turn-signal', 'missing-turn_signal', '方向燈訊號無法取得'],
+    ['buzzer', 'missing-buzzer', '警示音無法發出'],
+    ['display', 'missing-display', '中控儀表未配置'],
+  ];
+  for (const [id, alertId, title] of cases) {
+    const { e, s } = setup();
+    assert.equal(s().systemLevel, 'NORMAL');
+    assert.ok(!s().alerts.some((a) => a.id.startsWith('missing-')), 'the factory configuration is complete');
+    const cfg = e.config.devices.find((d) => d.id === id);
+    e.deleteDevice(id);
+    const a = s().alerts.find((x) => x.id === alertId);
+    assert.ok(a, `${id} removed -> ${alertId}`);
+    assert.equal(a.title, title);
+    assert.equal(a.level, 'warning');
+    assert.match(a.message, /未配置/);
+    assert.equal(s().systemLevel, 'WARNING', id);
+    assert.equal(s().alerts.filter((x) => x.id.startsWith('missing-')).length, 1, `only ${alertId}`);
+    assert.ok(s().log.some((l) => l.message === `警示：${title}`));
+    // adding a device of that role back clears the alert
+    e.addDevice({ ...cfg, priority: undefined });
+    assert.ok(!s().alerts.some((x) => x.id === alertId), `${id} re-added`);
+    assert.equal(s().systemLevel, 'NORMAL');
+    assert.ok(s().log.some((l) => l.message === `警示解除：${title}`));
+  }
+});
+
+test('a front collision sensor restores only the front check; the dashcam alert needs every dashcam gone', () => {
+  const { e, s } = setup();
+  e.deleteDevice('g-sensor');
+  e.deleteDevice('g-sensor-rear');
+  assert.ok(s().alerts.some((a) => a.id === 'missing-g_sensor-front'));
+  assert.ok(s().alerts.some((a) => a.id === 'missing-g_sensor-rear'));
+  e.addDevice({ id: 'g-front2', type: 'g_sensor', name: '前方碰撞傳感器（新）', zone: 'front', props: { position: 'front' } });
+  assert.ok(!s().alerts.some((a) => a.id === 'missing-g_sensor-front'));
+  assert.ok(s().alerts.some((a) => a.id === 'missing-g_sensor-rear'));
+  e.deleteDevice('dashcam-front');
+  assert.ok(!s().alerts.some((a) => a.id === 'missing-dashcam'), 'the rear dashcam still records');
+  e.deleteDevice('dashcam-rear');
+  assert.ok(s().alerts.some((a) => a.id === 'missing-dashcam'));
+});
+
+test('every state carries a server-run id and a revision that grows with each evaluation', () => {
+  const { e, act } = setup();
+  const a = e.publicState();
+  act('setRange', { km: 80 });
+  const b = e.publicState();
+  e.tick(1);
+  const c = e.publicState();
+  assert.equal(typeof a.bootId, 'string');
+  assert.equal(a.bootId, c.bootId);
+  assert.ok(b.rev > a.rev && c.rev > b.rev);
+  assert.notEqual(new Engine().publicState().bootId, a.bootId, 'a restarted server has another id');
+});
+
+test('HTTP API: an unknown log export format is rejected', async () => {
+  const engine = new Engine();
+  engine.state.clockRunning = false;
+  const server = http.createServer(createApp(engine)).listen(0);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    let r = await fetch(`${base}/api/log?format=xml`);
+    assert.equal(r.status, 400);
+    assert.deepEqual(await r.json(), { error: 'format 必須是 json 或 csv' });
+    r = await fetch(`${base}/api/log`);
+    assert.equal(r.status, 200, 'JSON is the default');
+    assert.ok(Array.isArray((await r.json()).entries));
+  } finally {
+    server.close();
+  }
+});
+
+test('npm test runs every test file (the script lists them, as Node 20 on Windows does not expand globs)', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const script = require('../package.json').scripts.test;
+  const files = fs.readdirSync(path.join(__dirname)).filter((f) => f.endsWith('.test.js'));
+  for (const f of files) assert.ok(script.split(' ').includes(`test/${f}`), `${f} is missing from the npm test script`);
+  assert.ok(!/[*?]/.test(script), 'no glob in the script');
+});
+
+test('a removed mirror only says the dashboard takes over while a working radar on that side remains', () => {
+  const { e, act, s } = setup();
+  e.deleteDevice('mirror-left');
+  const msg = () => s().alerts.find((a) => a.id === 'missing-mirror-left').message;
+  assert.equal(msg(), '未配置左側電子後視鏡，盲區警示改由儀表與蜂鳴器提示');
+  act('setFault', { id: 'radar-left', fault: true });
+  assert.equal(msg(), '未配置左側電子後視鏡');
+  act('setFault', { id: 'radar-left', fault: false });
+  e.deleteDevice('radar-left');
+  assert.equal(msg(), '未配置左側電子後視鏡');
+});
+
+test('within one priority the more severe alert is shown first', () => {
+  // a missing safety device (warning) before a device fault (info)
+  const a = setup();
+  a.act('setFault', { id: 'audio-sensor', fault: true });
+  a.e.deleteDevice('radar-left');
+  assert.equal(a.s().mainAlert.id, 'missing-bsd_radar-left');
+  assert.equal(a.s().mainAlert.level, 'warning');
+  assert.equal(a.dev('display').mode, 'WARNING');
+  // a critical power shortage before the alternator warning
+  const b = setup();
+  b.e.updateSettings({ batteryW: 150 }); // the battery alone cannot carry P0 + the P1 minimum
+  b.act('setAmbient', { celsius: -6 });
+  b.act('setAlternatorFault', { fault: true });
+  assert.equal(b.s().power.status, 'CRITICAL_POWER');
+  assert.equal(b.s().mainAlert.id, 'power');
+  assert.equal(b.s().mainAlert.level, 'critical');
+  assert.ok(b.s().alerts.some((x) => x.id === 'alternator'));
+});
