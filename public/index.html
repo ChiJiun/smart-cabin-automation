@@ -6,6 +6,7 @@
 <title>智慧車載中控</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="styles.css">
+<script type="importmap">{ "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/addons/" } }</script>
 </head>
 <body>
 <header class="topbar">
@@ -41,6 +42,23 @@
         <div id="powerBody"></div>
       </section>
     </div>
+    <section class="panel" id="v3dPanel">
+      <h2>3D 車輛狀態 <span class="sub">Vehicle 3D Preview</span></h2>
+      <div class="v3d">
+        <div class="v3d-viewport" id="v3dViewport" role="img" aria-describedby="v3dSummary">
+          <div class="v3d-labels" id="v3dLabels"></div>
+          <p class="v3d-fallback" id="v3dFallback" hidden>這個瀏覽器無法顯示 3D 畫面（WebGL 不可用），請看右側的部位狀態清單。</p>
+          <button type="button" class="btn sm v3d-reset" id="v3dReset">重設視角</button>
+          <p class="v3d-hint" aria-hidden="true">拖曳旋轉・滾輪縮放・點擊部位查看</p>
+        </div>
+        <div class="v3d-side">
+          <p class="v3d-summary" id="v3dSummary" aria-live="polite"></p>
+          <div class="v3d-parts" id="v3dParts" aria-label="車輛部位"></div>
+          <div class="v3d-detail" id="v3dDetail"></div>
+          <p class="v3d-legend hint" aria-hidden="true"><span data-level="critical">危急</span><span data-level="fault">故障</span><span data-level="warning">警示</span><span data-level="info">運作中</span></p>
+        </div>
+      </div>
+    </section>
     <section class="panel">
       <h2>車輛區域與設備 <span class="sub">Zones &amp; Devices</span></h2>
       <div class="zones" id="zones"></div>
@@ -166,5 +184,6 @@
 <section class="call-window" id="ecallWindow" tabindex="-1" role="dialog" aria-labelledby="ecallTitle" hidden></section>
 
 <script src="app.js"></script>
+<script type="module" src="vehicle3d.js"></script>
 </body>
 </html>

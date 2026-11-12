@@ -9,6 +9,10 @@ function createApp(engine = new Engine()) {
   engine.setMaxListeners(0); // one 'change' listener per open dashboard (SSE)
   app.use(express.json());
   app.use(express.static(path.join(__dirname, 'public')));
+  // three.js for the 3D preview, served from the installed package (no CDN needed during a demo).
+  const threeRoot = path.join(path.dirname(require.resolve('three')), '..');
+  app.use('/vendor/three/build', express.static(path.join(threeRoot, 'build')));
+  app.use('/vendor/three/addons', express.static(path.join(threeRoot, 'examples', 'jsm')));
 
   const wrap = (fn) => (req, res) => {
     try {

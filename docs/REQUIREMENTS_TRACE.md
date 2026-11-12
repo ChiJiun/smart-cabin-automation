@@ -28,6 +28,7 @@
 | 六大重大行為 | 見第 4 節 | b1–b6 | 見第 4 節 |
 | TA 模擬測試控制台、確定性模擬時鐘（可單步／暫停）、一鍵重置 | `Engine.js`：`tick`、`actions.clock`、`reset`、`factoryReset`；`server.js` 每秒推進一次 | system：reset restores…、reproducibility… | 頁首「暫停」「+1 秒」「+5 秒」「+10 秒」；操作台「重置狀態」「恢復原廠配置」 |
 | （設計補充）安全設備被刪除時，比照故障提示並升為 WARNING | `rules.js`：`missingSafetyFunctions`、`computeAlerts` | system：a removed safety device is reported like a faulted one…、a collision sensor without a position covers both sides… | 刪除設備後儀表的黃色「未配置」提示（TA_GUIDE 系統功能「缺少安全設備」） |
+| （設計補充）3D 車輛狀態預覽：發生狀況的部位高亮 | `src/engine/vehicleParts.js`：`deriveVehicleParts`、`partOfDevice`（隨狀態一起推送 `vehicleParts`）；`public/vehicle3d.js`（three.js，`server.js` 由 `/vendor/three` 在本機提供） | vehicle_parts：3D: every part is normal…、3D: a collision highlights the struck end…、HTTP: three.js is served locally… | 儀表「3D 車輛狀態」面板（TA_GUIDE 系統功能「3D 車輛狀態」） |
 | Out of Scope：影片編碼與電信撥號以模擬進度條與視窗呈現 | `app.js`：`renderCockpit`（上傳進度條）、`renderEcallWindow`（模擬通話視窗） | b1：eCall counts down 10 s… | 撞擊後的進度條與左下角「eCall 緊急通報」視窗 |
 
 七種狀態的觸發方式：

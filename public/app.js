@@ -184,6 +184,9 @@ function render(s, fromStream = false) {
   lastBoot = s.bootId;
   lastRev = s.rev;
   state = s;
+  // The 3D preview (vehicle3d.js, an ES module) follows the same state.
+  window.cabinState = s;
+  window.dispatchEvent(new CustomEvent('cabin:state', { detail: s }));
   renderHeader(s);
   renderCockpit(s);
   renderEcallWindow(s);

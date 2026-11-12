@@ -6,12 +6,13 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/b1_collision.test.js test/b2_siren.test.js test/b3_blindspot.test.js test/b4_range.test.js test/b5_power.test.js test/b6_climate.test.js test/system.test.js"
+    "test": "node --test test/b1_collision.test.js test/b2_siren.test.js test/b3_blindspot.test.js test/b4_range.test.js test/b5_power.test.js test/b6_climate.test.js test/system.test.js test/vehicle_parts.test.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "three": "0.160.0"
   }
 }
