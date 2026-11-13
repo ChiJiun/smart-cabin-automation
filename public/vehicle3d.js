@@ -13,19 +13,28 @@ const STATUS_LABEL = {
 const FALLBACK_TEXT = {
   webgl: '這個瀏覽器無法顯示 3D 畫面（WebGL 不可用），請看部位狀態清單。',
   load: '3D 元件載入失敗，無法顯示 3D 畫面，請看部位狀態清單。',
-  lost: '3D 畫面暫時中斷，正在恢復；請先看部位狀態清單。',
+  lost: '3D 畫面暫時中斷，正在嘗試恢復；請先看部位狀態清單。',
+  stuck: '3D 畫面中斷後沒有恢復，請看部位狀態清單，或重新整理頁面。',
 };
+const LOST_GIVE_UP_MS = 5000; // after this long without a restored context, stop saying it is recovering
 
 // Label anchor and camera preset for every part (+Z is the front of the car, +X its left side).
-// `probe` is the point tested for occlusion when it differs from the anchor (the mirror body sits
-// below its label, which stays visible above the windshield even when the mirror is hidden).
+// `probes` are the points tested for occlusion (default: the anchor). A label is dimmed only when
+// every probe is hidden behind another part: the mirror is tested at its body, below the label
+// that stays visible above the windshield; the chassis, which spans the whole car, at the outer
+// side of its four wheels and both side skirts, so it counts as visible while any of them is.
 const PART_VIEW = {
   front: { anchor: [0, 1.35, 2.15], cam: [2.8, 2.0, 4.4], target: [0, 0.85, 1.45] },
   rear: { anchor: [0, 1.38, -2.15], cam: [-2.8, 2.0, -4.4], target: [0, 0.85, -1.45] },
-  mirror_left: { anchor: [1.18, 1.32, 0.62], probe: [1.15, 0.99, 0.62], cam: [2.7, 1.65, 1.9], target: [1.05, 1.05, 0.62] },
-  mirror_right: { anchor: [-1.18, 1.32, 0.62], probe: [-1.15, 0.99, 0.62], cam: [-2.7, 1.65, 1.9], target: [-1.05, 1.05, 0.62] },
+  mirror_left: { anchor: [1.18, 1.32, 0.62], probes: [[1.15, 0.99, 0.62]], cam: [2.7, 1.65, 1.9], target: [1.05, 1.05, 0.62] },
+  mirror_right: { anchor: [-1.18, 1.32, 0.62], probes: [[-1.15, 0.99, 0.62]], cam: [-2.7, 1.65, 1.9], target: [-1.05, 1.05, 0.62] },
   cabin: { anchor: [0, 1.62, -0.15], cam: [3.2, 3.4, 0.6], target: [0, 1.1, -0.15] },
-  chassis: { anchor: [0.98, 0.5, -1.35], cam: [3.6, 0.9, -2.6], target: [0, 0.4, -0.6] },
+  chassis: {
+    anchor: [0.98, 0.5, -1.35],
+    probes: [[1.06, 0.38, 1.35], [-1.06, 0.38, 1.35], [1.06, 0.38, -1.35], [-1.06, 0.38, -1.35], [0.97, 0.34, -0.05], [-0.97, 0.34, -0.05]],
+    cam: [3.6, 0.9, -2.6],
+    target: [0, 0.4, -0.6],
+  },
 };
 const DEFAULT_CAM = [4.5, 2.8, 4.8];
 const DEFAULT_TARGET = [0, 0.8, 0];
@@ -271,15 +280,22 @@ function initScene(viewport) {
   renderer.domElement.addEventListener('pointerleave', () => setHovered(null));
 
   // When the GPU is reset the context is lost: show the fallback text until three.js restores it.
+  // If the browser does not restore it within LOST_GIVE_UP_MS, the text stops promising recovery.
+  let lostTimer = null;
   renderer.domElement.addEventListener('webglcontextlost', (e) => {
     e.preventDefault(); // allows the browser to restore the context
     view.contextLost = true;
     showFallback(viewport, 'lost');
+    renderUi();
+    clearTimeout(lostTimer);
+    lostTimer = setTimeout(() => { if (view.contextLost) showFallback(viewport, 'stuck'); }, LOST_GIVE_UP_MS);
   });
   renderer.domElement.addEventListener('webglcontextrestored', () => {
+    clearTimeout(lostTimer);
     view.contextLost = false;
     hideFallback(viewport);
     view.dirty = true;
+    renderUi();
   });
 
   new IntersectionObserver((entries) => {
@@ -325,7 +341,7 @@ function updateHighlight(time) {
 }
 
 // Whether a point of a part is hidden behind another part of the car from the camera.
-function occluded(id, point) {
+function hiddenPoint(id, point) {
   const dir = point.clone().sub(camera.position);
   const dist = dir.length();
   raycaster.set(camera.position, dir.normalize());
@@ -333,6 +349,12 @@ function occluded(id, point) {
   const hit = raycaster.intersectObjects(view.meshes, false).find((h) => h.object.userData.partId !== id);
   raycaster.far = Infinity;
   return !!hit;
+}
+
+// A part counts as hidden only when all of its probe points are hidden.
+function occluded(id) {
+  const pv = PART_VIEW[id];
+  return (pv.probes || [pv.anchor]).every((p) => hiddenPoint(id, new THREE.Vector3(...p)));
 }
 
 function placeLabels(viewport) {
@@ -344,7 +366,7 @@ function placeLabels(viewport) {
     const v = anchor.clone().project(camera);
     if (v.z > 1) { el.hidden = true; continue; }
     el.hidden = false;
-    el.classList.toggle('occluded', occluded(id, PART_VIEW[id].probe ? new THREE.Vector3(...PART_VIEW[id].probe) : anchor));
+    el.classList.toggle('occluded', occluded(id));
     shown.push({ id, el, x: (v.x * 0.5 + 0.5) * w, y: (-v.y * 0.5 + 0.5) * h });
   }
   // A label is kept inside the viewport (its box is centred on x and ends at y). Labels that would
@@ -404,6 +426,7 @@ function loop(viewport) {
 function showFallback(viewport, reason) {
   const fb = $('#v3dFallback');
   fb.textContent = FALLBACK_TEXT[reason];
+  viewport.dataset.fallback = reason;
   fb.hidden = false;
   viewport.classList.add('no-webgl');
   $('#v3dReset').hidden = true;
@@ -413,6 +436,7 @@ function showFallback(viewport, reason) {
 
 function hideFallback(viewport) {
   $('#v3dFallback').hidden = true;
+  delete viewport.dataset.fallback;
   viewport.classList.remove('no-webgl');
   $('#v3dReset').hidden = false;
   viewport.querySelector('.v3d-hint').hidden = false;
@@ -479,7 +503,7 @@ function renderUi() {
   const html = p ? `<h3>${esc(p.label)} <span class="v3d-chip" data-level="${p.level}">${esc(p.levelLabel)}</span></h3>
     ${p.items.length ? `<ul class="v3d-items">${p.items.map((i) => `<li data-level="${i.level}">${esc(i.text)}</li>`).join('')}</ul>` : '<p class="hint">目前沒有狀況。</p>'}
     <p class="hint">設備：${p.devices.length ? p.devices.map((d) => `${esc(d.name)}（${esc(STATUS_LABEL[d.status] || d.status)}）`).join('、') : '無'}</p>`
-    : view.webgl
+    : view.webgl && !view.contextLost
       ? '<p class="hint">點選 3D 車輛的部位、標籤或上方清單，查看該部位的狀況與設備。</p>'
       : '<p class="hint">點選上方清單的部位，查看該部位的狀況與設備。</p>';
   if (detail.dataset.html !== html) {
@@ -550,7 +574,6 @@ async function boot() {
   if (reason) {
     showFallback(viewport, reason);
     viewport.dataset.ready = 'fallback';
-    viewport.dataset.fallback = reason;
     renderUi();
     return;
   }
