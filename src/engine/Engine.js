@@ -5,6 +5,7 @@ const { randomUUID } = require('crypto');
 const { DEVICE_TYPES, getType } = require('./deviceTypes');
 const { allocatePower } = require('./powerManager');
 const rules = require('./rules');
+const { deriveVehicleParts } = require('./vehicleParts');
 const defaults = require('../config/defaultVehicle');
 const { STATIONS, haversineKm } = require('../config/stations');
 
@@ -194,6 +195,7 @@ class Engine extends EventEmitter {
       d.status = rules.deriveStatus(d);
     }
     s.zoneStatus = Object.fromEntries(this.config.zones.map((z) => [z.id, rules.deriveZoneStatus(s.devices.filter((d) => d.zone === z.id))]));
+    s.vehicleParts = deriveVehicleParts(s); // 3D preview: which part of the car is affected
     this._logChanges();
     // Every evaluation gets a new revision, so a dashboard can tell an older state (a slow POST
     // response) from a newer one it already received over SSE.
@@ -820,6 +822,7 @@ class Engine extends EventEmitter {
       mainAlert: s.mainAlert,
       buzzer: s.buzzer,
       systemLevel: s.systemLevel,
+      vehicleParts: s.vehicleParts,
       zones: this.config.zones.map((z) => ({
         ...z,
         status: s.zoneStatus[z.id] || 'STANDBY',
