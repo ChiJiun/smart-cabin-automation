@@ -1,9 +1,8 @@
 // 3D vehicle preview: the car is split into parts (front, rear, side mirrors, cabin, chassis);
 // a part with an active condition is highlighted in the colour of its most severe level, taken
 // from state.vehicleParts (computed by the engine). The part list next to the canvas shows the
-// same information as text, and is the fallback when WebGL is not available.
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+// same information as text. It does not depend on three.js, so it keeps working when WebGL is
+// not available, when three.js cannot be loaded, or while the WebGL context is lost.
 
 const LEVEL_COLOR = { critical: 0xef4444, fault: 0xa855f7, warning: 0xf59e0b, info: 0x38bdf8 };
 const LABEL_ORDER = ['ok', 'info', 'warning', 'fault', 'critical']; // least to most severe
@@ -11,18 +10,26 @@ const LEVEL_INTENSITY = { critical: 0.85, fault: 0.6, warning: 0.6, info: 0.3 };
 const STATUS_LABEL = {
   NORMAL: '正常', WARNING: '警示', EMERGENCY: '緊急', STANDBY: '待機', SHED: '已卸載', DEFERRED: '延後啟動', FAULT: '故障',
 };
+const FALLBACK_TEXT = {
+  webgl: '這個瀏覽器無法顯示 3D 畫面（WebGL 不可用），請看部位狀態清單。',
+  load: '3D 元件載入失敗，無法顯示 3D 畫面，請看部位狀態清單。',
+  lost: '3D 畫面暫時中斷，正在恢復；請先看部位狀態清單。',
+};
 
 // Label anchor and camera preset for every part (+Z is the front of the car, +X its left side).
+// `probe` is the point tested for occlusion when it differs from the anchor (the mirror body sits
+// below its label, which stays visible above the windshield even when the mirror is hidden).
 const PART_VIEW = {
   front: { anchor: [0, 1.35, 2.15], cam: [2.8, 2.0, 4.4], target: [0, 0.85, 1.45] },
   rear: { anchor: [0, 1.38, -2.15], cam: [-2.8, 2.0, -4.4], target: [0, 0.85, -1.45] },
-  mirror_left: { anchor: [1.18, 1.32, 0.62], cam: [2.7, 1.65, 1.9], target: [1.05, 1.05, 0.62] },
-  mirror_right: { anchor: [-1.18, 1.32, 0.62], cam: [-2.7, 1.65, 1.9], target: [-1.05, 1.05, 0.62] },
+  mirror_left: { anchor: [1.18, 1.32, 0.62], probe: [1.15, 0.99, 0.62], cam: [2.7, 1.65, 1.9], target: [1.05, 1.05, 0.62] },
+  mirror_right: { anchor: [-1.18, 1.32, 0.62], probe: [-1.15, 0.99, 0.62], cam: [-2.7, 1.65, 1.9], target: [-1.05, 1.05, 0.62] },
   cabin: { anchor: [0, 1.62, -0.15], cam: [3.2, 3.4, 0.6], target: [0, 1.1, -0.15] },
   chassis: { anchor: [0.98, 0.5, -1.35], cam: [3.6, 0.9, -2.6], target: [0, 0.4, -0.6] },
 };
-const DEFAULT_CAM = new THREE.Vector3(4.5, 2.8, 4.8);
-const DEFAULT_TARGET = new THREE.Vector3(0, 0.8, 0);
+const DEFAULT_CAM = [4.5, 2.8, 4.8];
+const DEFAULT_TARGET = [0, 0.8, 0];
+const LABEL_MARGIN = 4; // px kept free between a label and the edge of the viewport
 
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const $ = (sel) => document.querySelector(sel);
@@ -30,23 +37,25 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 
 const view = {
   parts: [],          // latest state.vehicleParts
+  partsKey: '',       // serialised parts, to skip state pushes that change nothing here
   selected: null,
   hovered: null,
   groups: {},         // part id -> THREE.Group
   meshes: [],         // raycast targets
   labels: {},         // part id -> label element
   rows: {},           // part id -> list button
-  webgl: false,
+  webgl: false,       // the 3D scene is running
+  contextLost: false, // the WebGL context is lost (the GPU was reset); three.js restores it
   visible: true,
   dirty: true,        // the scene must be drawn again
   frames: 0,          // frames drawn so far (exposed for tests)
   camAnimating: false,
-  camPos: DEFAULT_CAM.clone(),
-  camTarget: DEFAULT_TARGET.clone(),
+  camPos: null,
+  camTarget: null,
 };
-let scene; let camera; let renderer; let controls; let ring; let ground;
-const raycaster = new THREE.Raycaster();
-const pointer = new THREE.Vector2();
+// three.js is loaded on demand (see boot), so these are only set once the scene exists.
+let THREE; let OrbitControls;
+let scene; let camera; let renderer; let controls; let ring; let ground; let raycaster; let pointer;
 
 // ------------------------------------------------------------------ model
 function mat(color, roughness = 0.3, metalness = 0.6, emissive = 0x000000, emissiveIntensity = 0) {
@@ -68,6 +77,8 @@ function part(id, root) {
   return g;
 }
 
+// Lamps, the sensor module and the mirror LEDs use dim neutral colours: with the status colours
+// (red, amber, blue) they would look highlighted on a part that has no condition.
 function buildCar(root) {
   const paint = () => mat(0x334155, 0.28, 0.72);
   const glass = () => mat(0x0f172a, 0.1, 0.9);
@@ -103,8 +114,8 @@ function buildCar(root) {
   front.add(box(1.52, 0.54, 0.08, mat(0x1e293b, 0.1, 0.92), [0, 1.13, 0.82], -0.56));
   front.add(box(1.92, 0.34, 0.32, mat(0x1e293b, 0.45, 0.4), [0, 0.44, 2.15]));
   front.add(box(1.02, 0.28, 0.08, mat(0x0f172a, 0.4, 0.7), [0, 0.62, 2.21]));
-  front.add(box(0.18, 0.14, 0.09, mat(0x38bdf8, 0.2, 0.8, 0x0284c7, 0.5), [0, 0.58, 2.22]));
-  for (const x of [0.68, -0.68]) front.add(box(0.36, 0.12, 0.14, mat(0xe0f2fe, 0.1, 0.2, 0x38bdf8, 0.9), [x, 0.72, 2.16]));
+  front.add(box(0.18, 0.14, 0.09, mat(0x334155, 0.3, 0.8), [0, 0.58, 2.22]));
+  for (const x of [0.68, -0.68]) front.add(box(0.36, 0.12, 0.14, mat(0xe2e8f0, 0.1, 0.2, 0xf8fafc, 0.15), [x, 0.72, 2.16]));
 
   // Rear: trunk, rear window (defroster), spoiler, bumper, tail light, rear camera.
   const rear = part('rear', root);
@@ -112,8 +123,8 @@ function buildCar(root) {
   rear.add(box(1.5, 0.5, 0.08, mat(0x1e293b, 0.1, 0.92), [0, 1.14, -1.08], 0.55));
   rear.add(box(1.62, 0.06, 0.22, mat(0x1e293b, 0.3, 0.7), [0, 0.98, -2.08]));
   rear.add(box(1.92, 0.34, 0.3, mat(0x1e293b, 0.45, 0.4), [0, 0.44, -2.1]));
-  rear.add(box(1.74, 0.11, 0.1, mat(0xffe4e6, 0.15, 0.2, 0xf43f5e, 1.1), [0, 0.8, -2.14]));
-  rear.add(box(0.16, 0.08, 0.08, mat(0xf43f5e, 0.2, 0.8, 0xe11d48, 0.6), [0, 0.66, -2.16]));
+  rear.add(box(1.74, 0.11, 0.1, mat(0x4c1d24, 0.3, 0.3), [0, 0.8, -2.14]));
+  rear.add(box(0.16, 0.08, 0.08, mat(0x0f172a, 0.2, 0.8), [0, 0.66, -2.16]));
 
   // Side mirrors with the blind-spot LED (side 1 = left, +X).
   for (const [id, side] of [['mirror_left', 1], ['mirror_right', -1]]) {
@@ -122,7 +133,7 @@ function buildCar(root) {
     g.add(box(0.18, 0.07, 0.1, mat(0x1e293b, 0.4, 0.6), [side * 0.08, 0, 0]));
     g.add(box(0.26, 0.16, 0.18, mat(0x64748b, 0.22, 0.75), [side * 0.22, 0.03, 0]));
     g.add(box(0.22, 0.13, 0.02, mat(0xe2e8f0, 0.05, 0.98), [side * 0.22, 0.03, -0.085]));
-    g.add(box(0.2, 0.03, 0.02, mat(0xfef08a, 0.2, 0.2, 0xf59e0b, 0.9), [side * 0.22, 0.03, 0.088]));
+    g.add(box(0.2, 0.03, 0.02, mat(0x475569, 0.3, 0.5), [side * 0.22, 0.03, 0.088]));
   }
 
   for (const [id, g] of Object.entries(view.groups)) {
@@ -161,7 +172,6 @@ function webglAvailable() {
 }
 
 function initScene(viewport) {
-  if (!webglAvailable()) return false;
   try {
     renderer = new THREE.WebGLRenderer({ antialias: true });
   } catch (err) {
@@ -175,12 +185,16 @@ function initScene(viewport) {
   renderer.domElement.setAttribute('aria-hidden', 'true');
   viewport.prepend(renderer.domElement);
 
+  raycaster = new THREE.Raycaster();
+  pointer = new THREE.Vector2();
+  view.camPos = new THREE.Vector3(...DEFAULT_CAM);
+  view.camTarget = new THREE.Vector3(...DEFAULT_TARGET);
+
   scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2(0x0b0f19, 0.04);
-  applyTheme();
 
   camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
-  camera.position.copy(DEFAULT_CAM);
+  camera.position.set(...DEFAULT_CAM);
 
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
@@ -188,7 +202,7 @@ function initScene(viewport) {
   controls.maxPolarAngle = Math.PI / 2 - 0.03;
   controls.minDistance = 2.2;
   controls.maxDistance = 14;
-  controls.target.copy(DEFAULT_TARGET);
+  controls.target.set(...DEFAULT_TARGET);
   controls.addEventListener('start', () => { view.camAnimating = false; });
   controls.addEventListener('change', () => { view.dirty = true; });
 
@@ -256,12 +270,25 @@ function initScene(viewport) {
   renderer.domElement.addEventListener('pointermove', (e) => setHovered(pick(e)));
   renderer.domElement.addEventListener('pointerleave', () => setHovered(null));
 
+  // When the GPU is reset the context is lost: show the fallback text until three.js restores it.
+  renderer.domElement.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault(); // allows the browser to restore the context
+    view.contextLost = true;
+    showFallback(viewport, 'lost');
+  });
+  renderer.domElement.addEventListener('webglcontextrestored', () => {
+    view.contextLost = false;
+    hideFallback(viewport);
+    view.dirty = true;
+  });
+
   new IntersectionObserver((entries) => {
     view.visible = entries.some((x) => x.isIntersecting);
     view.dirty = true;
   }).observe(viewport);
   document.addEventListener('visibilitychange', invalidate);
   reduceMotion.addEventListener('change', invalidate);
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
   return true;
 }
 
@@ -297,31 +324,44 @@ function updateHighlight(time) {
   ring.material.opacity = worst === 'critical' ? 0.25 + 0.4 * pulse : 0.35;
 }
 
+// Whether a point of a part is hidden behind another part of the car from the camera.
+function occluded(id, point) {
+  const dir = point.clone().sub(camera.position);
+  const dist = dir.length();
+  raycaster.set(camera.position, dir.normalize());
+  raycaster.far = dist;
+  const hit = raycaster.intersectObjects(view.meshes, false).find((h) => h.object.userData.partId !== id);
+  raycaster.far = Infinity;
+  return !!hit;
+}
+
 function placeLabels(viewport) {
   const w = viewport.clientWidth;
   const h = viewport.clientHeight;
-  const v = new THREE.Vector3();
   const shown = [];
   for (const [id, el] of Object.entries(view.labels)) {
-    v.set(...PART_VIEW[id].anchor).project(camera);
+    const anchor = new THREE.Vector3(...PART_VIEW[id].anchor);
+    const v = anchor.clone().project(camera);
     if (v.z > 1) { el.hidden = true; continue; }
     el.hidden = false;
+    el.classList.toggle('occluded', occluded(id, PART_VIEW[id].probe ? new THREE.Vector3(...PART_VIEW[id].probe) : anchor));
     shown.push({ id, el, x: (v.x * 0.5 + 0.5) * w, y: (-v.y * 0.5 + 0.5) * h });
   }
-  // Labels that would overlap are moved up or down by a row; the selected part and the most
-  // severe parts keep their place. (The label box is centred on x and ends at y.)
-  const rank = (id) => {
-    const p = view.parts.find((x) => x.id === id);
-    return (id === view.selected ? -10 : 0) + (p ? -LABEL_ORDER.indexOf(p.level) : 0);
-  };
+  // A label is kept inside the viewport (its box is centred on x and ends at y). Labels that would
+  // overlap are moved up or down by a row; the selected part and the most severe parts keep their
+  // place.
+  const rank = (id) => (id === view.selected ? -10 : 0) - LABEL_ORDER.indexOf(levelOf(id));
   shown.sort((a, b) => rank(a.id) - rank(b.id));
   for (const l of shown) { l.w = l.el.offsetWidth; l.h = l.el.offsetHeight; }
+  const clamp = (n, lo, hi) => Math.min(Math.max(n, lo), Math.max(lo, hi));
   const placed = [];
   const hits = (l, y) => placed.some((p) => Math.abs(p.x - l.x) < (p.w + l.w) / 2 + 2 && Math.abs(p.y - y) < (p.h + l.h) / 2 + 2);
   for (const l of shown) {
+    l.x = clamp(l.x, l.w / 2 + LABEL_MARGIN, w - l.w / 2 - LABEL_MARGIN);
+    const fit = (y) => clamp(y, l.h + LABEL_MARGIN, h - LABEL_MARGIN);
     const step = l.h + 4;
-    const y = [0, -step, step, -2 * step, 2 * step].map((d) => l.y + d).find((c) => !hits(l, c));
-    if (y !== undefined) l.y = y;
+    const y = [0, -step, step, -2 * step, 2 * step].map((d) => fit(l.y + d)).find((c) => !hits(l, c));
+    l.y = y !== undefined ? y : fit(l.y);
     placed.push(l);
     l.el.style.left = `${l.x}px`;
     l.el.style.top = `${l.y}px`;
@@ -337,7 +377,7 @@ function invalidate() { view.dirty = true; }
 
 function loop(viewport) {
   requestAnimationFrame((t) => {
-    if (view.visible && !document.hidden) {
+    if (view.visible && !document.hidden && !view.contextLost) {
       if (view.camAnimating) {
         camera.position.lerp(view.camPos, 0.08);
         controls.target.lerp(view.camTarget, 0.08);
@@ -361,9 +401,27 @@ function loop(viewport) {
 }
 
 // ------------------------------------------------------------------ UI (labels, part list, detail)
-function buildUi(viewport) {
+function showFallback(viewport, reason) {
+  const fb = $('#v3dFallback');
+  fb.textContent = FALLBACK_TEXT[reason];
+  fb.hidden = false;
+  viewport.classList.add('no-webgl');
+  $('#v3dReset').hidden = true;
+  viewport.querySelector('.v3d-hint').hidden = true;
+  $('#v3dLabels').hidden = true;
+}
+
+function hideFallback(viewport) {
+  $('#v3dFallback').hidden = true;
+  viewport.classList.remove('no-webgl');
+  $('#v3dReset').hidden = false;
+  viewport.querySelector('.v3d-hint').hidden = false;
+  $('#v3dLabels').hidden = false;
+}
+
+// The part list works on its own, before (and without) the 3D scene.
+function buildList() {
   const list = $('#v3dParts');
-  const labels = $('#v3dLabels');
   for (const id of Object.keys(PART_VIEW)) {
     const row = document.createElement('button');
     row.type = 'button';
@@ -375,27 +433,24 @@ function buildUi(viewport) {
     row.addEventListener('mouseleave', () => setHovered(null));
     list.appendChild(row);
     view.rows[id] = row;
+  }
+}
 
-    if (view.webgl) {
-      const tag = document.createElement('button');
-      tag.type = 'button';
-      tag.className = 'v3d-label';
-      tag.dataset.part = id;
-      tag.tabIndex = -1; // the part list is the keyboard path
-      tag.addEventListener('click', () => select(view.selected === id ? null : id));
-      tag.addEventListener('mouseenter', () => setHovered(id));
-      tag.addEventListener('mouseleave', () => setHovered(null));
-      labels.appendChild(tag);
-      view.labels[id] = tag;
-    }
+function buildLabels() {
+  const labels = $('#v3dLabels');
+  for (const id of Object.keys(PART_VIEW)) {
+    const tag = document.createElement('button');
+    tag.type = 'button';
+    tag.className = 'v3d-label';
+    tag.dataset.part = id;
+    tag.tabIndex = -1; // the part list is the keyboard path
+    tag.addEventListener('click', () => select(view.selected === id ? null : id));
+    tag.addEventListener('mouseenter', () => setHovered(id));
+    tag.addEventListener('mouseleave', () => setHovered(null));
+    labels.appendChild(tag);
+    view.labels[id] = tag;
   }
   $('#v3dReset').addEventListener('click', () => { select(null); flyTo(DEFAULT_CAM, DEFAULT_TARGET); });
-  if (!view.webgl) {
-    viewport.classList.add('no-webgl');
-    $('#v3dFallback').hidden = false;
-    $('#v3dReset').hidden = true;
-    viewport.querySelector('.v3d-hint').hidden = true;
-  }
 }
 
 function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
@@ -442,39 +497,71 @@ function setHovered(id) {
 
 function flyTo(pos, target) {
   if (!camera) return;
-  view.camPos.copy(pos);
-  view.camTarget.copy(target);
+  view.camPos.set(...pos);
+  view.camTarget.set(...target);
   view.camAnimating = true;
 }
 
 function select(id) {
   view.selected = id;
   view.dirty = true;
-  if (id) flyTo(new THREE.Vector3(...PART_VIEW[id].cam), new THREE.Vector3(...PART_VIEW[id].target));
+  if (id) flyTo(PART_VIEW[id].cam, PART_VIEW[id].target);
   renderUi();
 }
 
 // ------------------------------------------------------------------ boot
 function onState(s) {
   if (!s || !Array.isArray(s.vehicleParts)) return;
+  // The dashboard pushes the whole state every simulated second; redraw only when a part changed.
+  const key = JSON.stringify(s.vehicleParts);
+  if (key === view.partsKey) return;
+  view.partsKey = key;
   view.parts = s.vehicleParts;
   view.dirty = true;
   renderUi();
 }
 
-function boot() {
+// Loads three.js; returns false when it cannot be loaded (offline without the server's copy, a
+// browser without import maps, ...).
+async function loadThree() {
+  try {
+    const [three, addons] = await Promise.all([import('three'), import('three/addons/controls/OrbitControls.js')]);
+    THREE = three;
+    ({ OrbitControls } = addons);
+    return true;
+  } catch (err) {
+    console.warn('3D 預覽：three.js 載入失敗', err);
+    return false;
+  }
+}
+
+async function boot() {
   const viewport = $('#v3dViewport');
   if (!viewport) return;
-  view.webgl = initScene(viewport);
-  buildUi(viewport);
-  if (view.webgl) {
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
-    loop(viewport);
-  }
-  viewport.dataset.ready = view.webgl ? 'webgl' : 'fallback';
   window.vehicle3d = { frames: () => view.frames }; // for automated checks
+  buildList();
   window.addEventListener('cabin:state', (e) => onState(e.detail));
   onState(window.cabinState);
+
+  let reason = null;
+  if (!webglAvailable()) reason = 'webgl';
+  else if (!(await loadThree())) reason = 'load';
+  else if (!initScene(viewport)) reason = 'webgl';
+  if (reason) {
+    showFallback(viewport, reason);
+    viewport.dataset.ready = 'fallback';
+    viewport.dataset.fallback = reason;
+    renderUi();
+    return;
+  }
+  view.webgl = true;
+  buildLabels();
+  if (view.selected) flyTo(PART_VIEW[view.selected].cam, PART_VIEW[view.selected].target); // picked in the list while loading
+  hideFallback(viewport);
+  view.dirty = true;
+  renderUi();
+  loop(viewport);
+  viewport.dataset.ready = 'webgl';
 }
 
 boot();

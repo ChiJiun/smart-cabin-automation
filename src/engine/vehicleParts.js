@@ -110,7 +110,7 @@ function deriveVehicleParts(state) {
   // Behavior 5: the power budget is managed for the cabin loads.
   if (power.status === 'CRITICAL_POWER') add('cabin', 'critical', '電力不足，僅維持安全設備');
   else if (power.status === 'OVERLOAD') add('cabin', 'warning', `電力超載（需求 ${power.requestedPct}%）`);
-  else if (power.status === 'HIGH_LOAD') add('cabin', 'info', `用電量偏高（${power.loadPct}%）`);
+  else if (power.status === 'HIGH_LOAD') add('cabin', 'warning', `用電量偏高（${power.loadPct}%）`); // a warning on the dashboard too
   if (power.alternatorFault) add('chassis', 'warning', '發電機異常，電瓶供電中');
 
   // Devices: faults, and outputs that are working right now.

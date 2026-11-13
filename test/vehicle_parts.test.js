@@ -102,6 +102,11 @@ test('3D: low range and power problems are shown on the chassis and the cabin', 
   assert.equal(parts(s).chassis.level, 'fault');
   assert.ok(parts(s).chassis.items.some((i) => i.text === '里程資訊無法取得'));
 
+  act('setCapacity', { watts: 240 });
+  assert.equal(s().power.status, 'HIGH_LOAD');
+  assert.equal(parts(s).cabin.level, 'warning', 'a warning on the dashboard, a warning on the part');
+  assert.equal(parts(s).cabin.summary, `用電量偏高（${s().power.loadPct}%）`);
+
   e.loadScenario('winter-overload');
   assert.equal(parts(s).cabin.level, 'warning');
   assert.equal(parts(s).cabin.summary, '電力超載（需求 129.6%）');

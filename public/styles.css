@@ -334,6 +334,7 @@ td input[type=number] { width: 72px; }
 .v3d-label[data-level="warning"] { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); }
 .v3d-label[data-level="info"] { color: var(--v3d-info); border-color: var(--v3d-info); }
 .v3d-label.active { outline: 2px solid var(--accent); outline-offset: 1px; }
+.v3d-label.occluded { opacity: .45; } /* the part is behind the car body from this angle */
 @keyframes v3dPulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--crit-solid) 35%, transparent); } }
 @media (prefers-reduced-motion: reduce) { .v3d-label[data-level="critical"] { animation: none; } }
 .v3d-reset { position: absolute; top: 8px; right: 8px; }
